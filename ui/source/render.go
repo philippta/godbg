@@ -28,6 +28,8 @@ func (v *View) LoadFile(path string, pc int) {
 		panic(err)
 	}
 
+	src = bytes.ReplaceAll(src, []byte{'\t'}, []byte("    "))
+
 	v.lines = bytes.Split(src, []byte{'\n'})
 	v.pc = pc
 	v.ScrollTo(pc)
@@ -61,7 +63,7 @@ func RenderLines(lines [][]byte, start, width, height, pc int, bp []int) []byte 
 		iotaBuf      = [iotaBufCap]byte{}
 		padBuf       = [iotaBufCap]byte{}
 		lineNumWidth = numDigits(len(lines))
-		srcWidth     = width - lineNumWidth
+		srcWidth     = width - lineNumWidth - 3 // pc marker
 		linecount    = 1
 	)
 
@@ -71,7 +73,7 @@ func RenderLines(lines [][]byte, start, width, height, pc int, bp []int) []byte 
 
 	buf := make([]byte, 0, width*height)
 
-	for i := start; i < min(start+height, len(lines)); i++ {
+	for i := start; i < min(start+height, len(lines)-1); i++ {
 		if i == pc-1 {
 			buf = append(buf, '=', '>', ' ')
 		} else if slices.Contains(bp, i) {
@@ -90,18 +92,6 @@ func RenderLines(lines [][]byte, start, width, height, pc int, bp []int) []byte 
 		endc := min(srcWidth, ll)
 		buf = append(buf, lines[i][:endc]...)
 		buf = append(buf, '\n')
-
-		if endc < ll {
-			buf = append(buf, padBuf[iotaBufCap-lineNumWidth-4:]...)
-			buf = append(buf, lines[i][endc:min(endc+srcWidth, ll)]...)
-			buf = append(buf, '\n')
-			endc = min(endc+srcWidth, ll)
-			linecount++
-
-			if linecount > height {
-				break
-			}
-		}
 
 		linecount++
 		if linecount > height {
