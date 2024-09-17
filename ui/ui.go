@@ -71,7 +71,7 @@ func (v view) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			v.thread = dmsg.Body.ThreadId
 			dap.Stack(v.conn, dmsg.Body.ThreadId)
 		case *godap.StackTraceResponse:
-			if len(dmsg.Body.StackFrames) > 0 {
+			if len(dmsg.Body.StackFrames) > 0 && dmsg.Body.StackFrames[0].Source != nil {
 				v.source.LoadFile(dmsg.Body.StackFrames[0].Source.Path, dmsg.Body.StackFrames[0].Line)
 			}
 		case *godap.TerminatedEvent:

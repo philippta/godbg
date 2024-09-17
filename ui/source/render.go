@@ -63,7 +63,7 @@ func RenderLines(lines [][]byte, start, width, height, pc int, bp []int) []byte 
 		iotaBuf      = [iotaBufCap]byte{}
 		padBuf       = [iotaBufCap]byte{}
 		lineNumWidth = numDigits(len(lines))
-		srcWidth     = width - lineNumWidth - 3 // pc marker
+		srcWidth     = width - lineNumWidth - 4 // pc marker + ":"
 		linecount    = 1
 	)
 
@@ -74,22 +74,27 @@ func RenderLines(lines [][]byte, start, width, height, pc int, bp []int) []byte 
 	buf := make([]byte, 0, width*height)
 
 	for i := start; i < min(start+height, len(lines)-1); i++ {
+		buf = append(buf, "\033[0m"...)
+		buf = append(buf, "\033[93m"...)
 		if i == pc-1 {
-			buf = append(buf, '=', '>', ' ')
+			buf = append(buf, "=> "...)
 		} else if slices.Contains(bp, i) {
-			buf = append(buf, '*', ' ', ' ')
+			buf = append(buf, "*  "...)
 		} else {
-			buf = append(buf, ' ', ' ', ' ')
+			buf = append(buf, "   "...)
 		}
 
 		paddedItoa(iotaBuf[:], i+1)
 
+		buf = append(buf, "\033[34m"...)
 		buf = append(buf, iotaBuf[iotaBufCap-lineNumWidth:]...)
+		buf = append(buf, ':')
 		buf = append(buf, ' ')
 
 		ll := len(lines[i])
-
 		endc := min(srcWidth, ll)
+
+		buf = append(buf, "\033[39m"...)
 		buf = append(buf, lines[i][:endc]...)
 		buf = append(buf, '\n')
 

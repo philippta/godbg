@@ -3,7 +3,6 @@ module github.com/philippta/godbg
 go 1.23.0
 
 require (
-	github.com/carlmjohnson/be v0.23.2
 	github.com/charmbracelet/bubbletea v1.1.1
 	github.com/google/go-dap v0.12.0
 )
