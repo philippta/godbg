@@ -11,14 +11,16 @@ type View struct {
 	height int
 	start  int
 	pc     int
+	cursor int
 	bp     []int
 	lines  [][]byte
 	path   string
 }
 
-func (v *View) LoadFile(path string, pc int) {
+func (v *View) LoadFile(path string, pc int, bp []int) {
 	if path == v.path {
 		v.pc = pc
+		v.cursor = pc
 		v.ScrollTo(pc)
 		return
 	}
@@ -29,10 +31,20 @@ func (v *View) LoadFile(path string, pc int) {
 	}
 
 	src = bytes.ReplaceAll(src, []byte{'\t'}, []byte("    "))
-
 	v.lines = bytes.Split(src, []byte{'\n'})
 	v.pc = pc
+	v.cursor = pc
 	v.ScrollTo(pc)
+	v.path = path
+	v.bp = bp
+}
+
+func (v *View) SetBreakpoints(bp []int) {
+	v.bp = bp
+}
+
+func (v *View) Location() (string, int) {
+	return v.path, v.cursor
 }
 
 func (v *View) Resize(width, height int) {
@@ -41,18 +53,26 @@ func (v *View) Resize(width, height int) {
 }
 
 func (v *View) ScrollBy(n int) {
-	v.start = max(0, min(v.start+n, len(v.lines)-v.height-1))
+	v.cursor = max(1, min(v.cursor+n, len(v.lines)-1))
+
+	if n > 0 && v.cursor > v.start+v.height-3 {
+		v.start = min(v.start+n, len(v.lines)-1-v.height)
+	}
+	if n < 0 && v.cursor < v.start+3 {
+		v.start = max(0, v.start+n)
+	}
 }
 
 func (v *View) ScrollTo(n int) {
-	v.start = max(0, min(n-v.height/2, len(v.lines)-v.height-1))
+	v.cursor = max(1, min(n, len(v.lines)-1))
+	v.start = max(0, min(v.cursor-v.height/2, len(v.lines)-1-v.height))
 }
 
 func (v *View) Render() string {
-	return string(RenderLines(v.lines, v.start, v.width, v.height, v.pc, v.bp))
+	return string(RenderLines(v.lines, v.start, v.width, v.height, v.pc, v.cursor, v.bp))
 }
 
-func RenderLines(lines [][]byte, start, width, height, pc int, bp []int) []byte {
+func RenderLines(lines [][]byte, start, width, height, pc, cursor int, bp []int) []byte {
 	if len(lines) == 0 {
 		return []byte{}
 	}
@@ -75,13 +95,22 @@ func RenderLines(lines [][]byte, start, width, height, pc int, bp []int) []byte 
 
 	for i := start; i < min(start+height, len(lines)-1); i++ {
 		buf = append(buf, "\033[0m"...)
-		buf = append(buf, "\033[93m"...)
+
 		if i == pc-1 {
+			buf = append(buf, "\033[93m"...)
 			buf = append(buf, "=> "...)
-		} else if slices.Contains(bp, i) {
-			buf = append(buf, "*  "...)
+		} else if i == cursor-1 {
+			buf = append(buf, "\033[32m"...)
+			buf = append(buf, "=> "...)
 		} else {
 			buf = append(buf, "   "...)
+		}
+
+		if slices.Contains(bp, i+1) {
+			buf = append(buf, "\033[91m"...)
+			buf = append(buf, "* "...)
+		} else {
+			buf = append(buf, "  "...)
 		}
 
 		paddedItoa(iotaBuf[:], i+1)
@@ -94,7 +123,11 @@ func RenderLines(lines [][]byte, start, width, height, pc int, bp []int) []byte 
 		ll := len(lines[i])
 		endc := min(srcWidth, ll)
 
-		buf = append(buf, "\033[39m"...)
+		if i == pc-1 {
+			buf = append(buf, "\033[97m"...)
+		} else {
+			buf = append(buf, "\033[37m"...)
+		}
 		buf = append(buf, lines[i][:endc]...)
 		buf = append(buf, '\n')
 

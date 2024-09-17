@@ -88,6 +88,15 @@ func Stack(w io.Writer, thread int) {
 	req := &dap.StackTraceRequest{Request: newRequest("stackTrace")}
 	req.Arguments = dap.StackTraceArguments{
 		ThreadId: thread,
+		Levels:   1,
+	}
+	dap.WriteProtocolMessage(w, req)
+}
+
+func Scopes(w io.Writer, frameID int) {
+	req := &dap.ScopesRequest{Request: newRequest("scopes")}
+	req.Arguments = dap.ScopesArguments{
+		FrameId: frameID,
 	}
 	dap.WriteProtocolMessage(w, req)
 }
@@ -115,6 +124,28 @@ func BreakpointFunc(w io.Writer, name string) {
 	dap.WriteProtocolMessage(w, req)
 }
 
+type Breakpoint struct {
+	Path string
+	Line int
+}
+
+func BreakpointsFile(w io.Writer, path string, lines []int) {
+	bps := make([]dap.SourceBreakpoint, len(lines))
+	for i, line := range lines {
+		bps[i] = dap.SourceBreakpoint{Line: line}
+	}
+
+	req := &dap.SetBreakpointsRequest{Request: newRequest("setBreakpoints")}
+	req.Arguments = dap.SetBreakpointsArguments{
+		Source: dap.Source{
+			Name: path,
+			Path: path,
+		},
+		Breakpoints: bps,
+	}
+	dap.WriteProtocolMessage(w, req)
+}
+
 func Next(w io.Writer, thread int) {
 	req := &dap.NextRequest{Request: newRequest("next")}
 	req.Arguments = dap.NextArguments{
@@ -138,6 +169,14 @@ func StepOut(w io.Writer, thread int) {
 	req.Arguments = dap.StepOutArguments{
 		ThreadId:     thread,
 		SingleThread: true,
+	}
+	dap.WriteProtocolMessage(w, req)
+}
+
+func Variables(w io.Writer, ref int) {
+	req := &dap.VariablesRequest{Request: newRequest("variables")}
+	req.Arguments = dap.VariablesArguments{
+		VariablesReference: ref,
 	}
 	dap.WriteProtocolMessage(w, req)
 }
