@@ -1,14 +1,14 @@
 package ui
 
 import (
-	"encoding/json"
+	"bytes"
 	"net"
+	"os"
 	"slices"
 
 	tea "github.com/charmbracelet/bubbletea"
 	godap "github.com/google/go-dap"
 	"github.com/philippta/godbg/dap"
-	"github.com/philippta/godbg/debug"
 )
 
 func Run(program string) {
@@ -34,9 +34,10 @@ type breakpoint struct {
 }
 
 type view struct {
+	width  int
+	height int
+
 	sourceView struct {
-		width       int
-		height      int
 		file        string
 		lines       [][]byte
 		lineStart   int
@@ -79,13 +80,13 @@ func (v view) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			v.sourceToggleBreakpoint(v.sourceView.lineCursor)
 		}
 	case tea.WindowSizeMsg:
-		v.sourceView.height = msg.Height
-		v.sourceView.width = msg.Width
+		v.width = msg.Width
+		v.height = msg.Height
 	case godap.Message:
-		debug.Logf("%T", msg)
-		b, _ := json.MarshalIndent(msg, "", "  ")
-		debug.Logf("%s", b)
-		debug.Logf("")
+		// debug.Logf("%T", msg)
+		// b, _ := json.MarshalIndent(msg, "", "  ")
+		// debug.Logf("%s", b)
+		// debug.Logf("")
 
 		switch dmsg := msg.(type) {
 		case *godap.StoppedEvent:
@@ -115,17 +116,27 @@ func (v view) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (v view) View() string {
-	source := sourceRender(
+	source, sourceLens := sourceRenderV3(
 		v.sourceView.lines,
-		v.sourceView.width,
-		v.sourceView.height,
+		v.width/2,
+		v.height,
 		v.sourceView.lineStart,
 		v.sourceView.pcCursor,
 		v.sourceView.lineCursor,
 		v.sourceView.breakpoints[v.sourceView.file],
 	)
 
-	return source
+	if len(source) == 0 {
+		return ""
+	}
+
+	variables := []string{"Line1", "Line2 HELLO WORLD", "Line3"}
+	variablesLens := []int{5, 17, 5}
+
+	return verticalSplit(v.width,
+		block{source, sourceLens},
+		block{variables, variablesLens},
+	)
 }
 
 func (v view) waitForDapMsg() tea.Cmd {
@@ -136,11 +147,19 @@ func (v view) waitForDapMsg() tea.Cmd {
 
 func (v *view) sourceLoadFile(path string, line int) {
 	if v.sourceView.file != path {
+		src, err := os.ReadFile(path)
+		if err != nil {
+			panic(err)
+		}
+
+		src = bytes.ReplaceAll(src, []byte{'\t'}, []byte("    "))
+
+		v.sourceView.lines = bytes.Split(src, []byte{'\n'})
 		v.sourceView.file = path
-		v.sourceView.lines = sourceLoadFile(path)
 	}
 	v.sourceView.pcCursor = line - 1
 	v.sourceView.lineCursor = line - 1
+	v.sourceView.lineStart = max(0, min(line-1-v.height/2, len(v.sourceView.lines)-1-v.height))
 }
 
 func (v *view) sourceMoveUp() {
@@ -152,8 +171,8 @@ func (v *view) sourceMoveUp() {
 
 func (v *view) sourceMoveDown() {
 	v.sourceView.lineCursor = min(v.sourceView.lineCursor+1, len(v.sourceView.lines)-2)
-	if v.sourceView.lineCursor > v.sourceView.lineStart+v.sourceView.height-3 {
-		v.sourceView.lineStart = min(v.sourceView.lineStart+1, len(v.sourceView.lines)-1-v.sourceView.height)
+	if v.sourceView.lineCursor > v.sourceView.lineStart+v.height-3 {
+		v.sourceView.lineStart = min(v.sourceView.lineStart+1, len(v.sourceView.lines)-1-v.height)
 	}
 }
 func (v *view) sourceToggleBreakpoint(i int) {

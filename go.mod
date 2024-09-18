@@ -4,6 +4,7 @@ go 1.23.0
 
 require (
 	github.com/charmbracelet/bubbletea v1.1.1
+	github.com/efficient/qlease v0.0.0-20141011000128-f965b871ecff
 	github.com/google/go-dap v0.12.0
 )
 
