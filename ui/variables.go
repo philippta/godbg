@@ -1,4 +1,4 @@
-package variables
+package ui
 
 import (
 	"bytes"
@@ -7,7 +7,7 @@ import (
 	"github.com/google/go-dap"
 )
 
-func Print(vars []dap.Variable) string {
+func variablesRender(vars []dap.Variable) string {
 	if len(vars) == 0 {
 		return ""
 	}

@@ -132,7 +132,7 @@ type Breakpoint struct {
 func BreakpointsFile(w io.Writer, path string, lines []int) {
 	bps := make([]dap.SourceBreakpoint, len(lines))
 	for i, line := range lines {
-		bps[i] = dap.SourceBreakpoint{Line: line}
+		bps[i] = dap.SourceBreakpoint{Line: line + 1}
 	}
 
 	req := &dap.SetBreakpointsRequest{Request: newRequest("setBreakpoints")}
