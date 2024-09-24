@@ -2,13 +2,19 @@ package ui
 
 import (
 	"bytes"
+	"log"
 	"net"
 	"os"
+	"os/signal"
 	"slices"
+	"syscall"
+	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
 	godap "github.com/google/go-dap"
+	"github.com/mattn/go-tty"
 	"github.com/philippta/godbg/dap"
+	"github.com/philippta/godbg/debug"
+	"github.com/philippta/godbg/term"
 )
 
 func Run(program string) {
@@ -16,15 +22,146 @@ func Run(program string) {
 	dap.BreakpointFunc(conn, "main.main")
 	dap.Continue(conn)
 
-	v := view{
-		conn: conn,
-		msgs: msgs,
-	}
+	v := &view{}
+	v.conn = conn
+	v.msgs = msgs
 	v.sourceView.breakpoints = map[string][]int{}
 
-	p := tea.NewProgram(v, tea.WithAltScreen())
-	if _, err := p.Run(); err != nil {
+	tty, err := tty.Open()
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer tty.Close()
+
+	out := tty.Output()
+	out.Write(term.AltScreen)
+	out.Write(term.HideCursor)
+	defer out.Write(term.ShowCursor)
+	defer out.Write(term.ExitAltScreen)
+	resize(v, tty)
+
+	repaintCh := make(chan struct{})
+	go listenresize(v, tty, repaintCh)
+	go paintloop(v, tty, repaintCh)
+	go daploop(v, msgs, repaintCh)
+	inputloop(v, tty, repaintCh)
+	close(repaintCh)
+}
+
+func resize(v *view, tty *tty.TTY) {
+	width, height, err := tty.Size()
+	if err != nil {
 		panic(err)
+	}
+	v.width = width
+	v.height = height
+}
+
+func paintloop(v *view, tty *tty.TTY, repaint <-chan struct{}) {
+	out := tty.Output()
+	for range repaint {
+		out.Write(term.ResetCursor)
+		out.WriteString(render(v))
+	}
+}
+
+func daploop(v *view, msgs <-chan godap.Message, repaint chan<- struct{}) {
+	for msg := range msgs {
+		switch dmsg := msg.(type) {
+		case *godap.StoppedEvent:
+			v.thread = dmsg.Body.ThreadId
+			dap.Stack(v.conn, dmsg.Body.ThreadId)
+		case *godap.StackTraceResponse:
+			if len(dmsg.Body.StackFrames) == 0 {
+				break
+			}
+			frame := dmsg.Body.StackFrames[0]
+			if frame.Source != nil {
+				v.sourceLoadFile(frame.Source.Path, frame.Line)
+			}
+			dap.Scopes(v.conn, frame.Id)
+		case *godap.ScopesResponse:
+			if len(dmsg.Body.Scopes) > 0 {
+				dap.Variables(v.conn, dmsg.Body.Scopes[0].VariablesReference)
+			}
+		case *godap.VariablesResponse:
+			v.variablesView.variables = dmsg.Body.Variables
+			repaint <- struct{}{}
+		case *godap.SetBreakpointsResponse:
+			repaint <- struct{}{}
+		case *godap.TerminatedEvent:
+			return
+		}
+
+	}
+}
+
+func inputloop(v *view, tty *tty.TTY, repaint chan<- struct{}) {
+	for {
+		key, err := tty.ReadRune()
+		if err != nil {
+			panic(err)
+		}
+
+		switch key {
+		case 'q':
+			return
+		case 'k': // Move up
+			v.sourceMoveUp()
+			repaint <- struct{}{}
+		case 'j': // Move down
+			v.sourceMoveDown()
+			repaint <- struct{}{}
+		case 's': // Step
+			dap.Next(v.conn, v.thread)
+		case 'i': // Step in
+			dap.StepIn(v.conn, v.thread)
+		case 'o': // Step out
+			dap.StepOut(v.conn, v.thread)
+		case 'c': // Continue
+			dap.Continue(v.conn)
+		case 'b': // Breakpoint
+			v.sourceToggleBreakpoint(v.sourceView.lineCursor)
+		}
+	}
+}
+
+func render(v *view) string {
+	start := time.Now()
+	defer func() {
+		debug.Logf("Render time: %v", time.Since(start))
+	}()
+
+	source, sourceLens := sourceRender(
+		v.sourceView.lines,
+		v.width/2,
+		v.height,
+		v.sourceView.lineStart,
+		v.sourceView.pcCursor,
+		v.sourceView.lineCursor,
+		v.sourceView.breakpoints[v.sourceView.file],
+	)
+
+	if len(source) == 0 {
+		return ""
+	}
+
+	variables := []string{"Line1", "Line2 HELLO WORLD", "Line3"}
+	variablesLens := []int{5, 17, 5}
+
+	return verticalSplit(
+		v.width, v.height,
+		block{source, sourceLens},
+		block{variables, variablesLens},
+	)
+}
+
+func listenresize(v *view, tty *tty.TTY, repaint chan<- struct{}) {
+	ch := make(chan os.Signal, 1)
+	signal.Notify(ch, syscall.SIGWINCH)
+	for range ch {
+		resize(v, tty)
+		repaint <- struct{}{}
 	}
 }
 
@@ -52,97 +189,6 @@ type view struct {
 	thread int
 	conn   net.Conn
 	msgs   <-chan godap.Message
-}
-
-func (v view) Init() tea.Cmd {
-	return v.waitForDapMsg()
-}
-
-func (v view) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	switch msg := msg.(type) {
-	case tea.KeyMsg:
-		switch msg.String() {
-		case "ctrl+c", "q":
-			return v, tea.Quit
-		case "k": // Move up
-			v.sourceMoveUp()
-		case "j": // Move down
-			v.sourceMoveDown()
-		case "s": // Step
-			dap.Next(v.conn, v.thread)
-		case "i": // Step in
-			dap.StepIn(v.conn, v.thread)
-		case "o": // Step out
-			dap.StepOut(v.conn, v.thread)
-		case "c": // Continue
-			dap.Continue(v.conn)
-		case "b": // Breakpoint
-			v.sourceToggleBreakpoint(v.sourceView.lineCursor)
-		}
-	case tea.WindowSizeMsg:
-		v.width = msg.Width
-		v.height = msg.Height
-	case godap.Message:
-		// debug.Logf("%T", msg)
-		// b, _ := json.MarshalIndent(msg, "", "  ")
-		// debug.Logf("%s", b)
-		// debug.Logf("")
-
-		switch dmsg := msg.(type) {
-		case *godap.StoppedEvent:
-			v.thread = dmsg.Body.ThreadId
-			dap.Stack(v.conn, dmsg.Body.ThreadId)
-		case *godap.StackTraceResponse:
-			if len(dmsg.Body.StackFrames) == 0 {
-				break
-			}
-			frame := dmsg.Body.StackFrames[0]
-			if frame.Source != nil {
-				v.sourceLoadFile(frame.Source.Path, frame.Line)
-			}
-			dap.Scopes(v.conn, frame.Id)
-		case *godap.ScopesResponse:
-			if len(dmsg.Body.Scopes) > 0 {
-				dap.Variables(v.conn, dmsg.Body.Scopes[0].VariablesReference)
-			}
-		case *godap.VariablesResponse:
-			v.variablesView.variables = dmsg.Body.Variables
-		case *godap.TerminatedEvent:
-			return v, tea.Quit
-		}
-	}
-
-	return v, v.waitForDapMsg()
-}
-
-func (v view) View() string {
-	source, sourceLens := sourceRenderV3(
-		v.sourceView.lines,
-		v.width/2,
-		v.height,
-		v.sourceView.lineStart,
-		v.sourceView.pcCursor,
-		v.sourceView.lineCursor,
-		v.sourceView.breakpoints[v.sourceView.file],
-	)
-
-	if len(source) == 0 {
-		return ""
-	}
-
-	variables := []string{"Line1", "Line2 HELLO WORLD", "Line3"}
-	variablesLens := []int{5, 17, 5}
-
-	return verticalSplit(v.width,
-		block{source, sourceLens},
-		block{variables, variablesLens},
-	)
-}
-
-func (v view) waitForDapMsg() tea.Cmd {
-	return func() tea.Msg {
-		return <-v.msgs
-	}
 }
 
 func (v *view) sourceLoadFile(path string, line int) {

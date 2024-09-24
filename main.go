@@ -2,7 +2,6 @@ package main
 
 import (
 	"os"
-	"time"
 
 	"github.com/philippta/godbg/debug"
 	"github.com/philippta/godbg/ui"
@@ -17,8 +16,4 @@ func main() {
 	}
 
 	ui.Run(program)
-}
-
-func minisleep() {
-	time.Sleep(100 * time.Millisecond)
 }

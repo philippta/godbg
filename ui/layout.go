@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"bytes"
 	"strings"
 )
 
@@ -10,32 +9,36 @@ type block struct {
 	lens  []int
 }
 
-func verticalSplit(width int, blocks ...block) string {
-	maxLines := 0
-	for i := range blocks {
-		maxLines = max(maxLines, len(blocks[i].lines))
-	}
+var lineFill = strings.Repeat(" ", 1000)
+
+func verticalSplit(width int, height int, blocks ...block) string {
+	var buf strings.Builder
+	buf.Grow(width*height + 1000)
 
 	splitWidth := width / len(blocks)
-	lineFill := strings.Repeat(".", splitWidth)
 
-	var buf bytes.Buffer
-
-	for i := 0; i < maxLines; i++ {
+	for i := 0; i < height; i++ {
 		for j := 0; j < len(blocks); j++ {
 			if i >= len(blocks[j].lines) {
+				buf.WriteString(lineFill[:splitWidth])
 				continue
 			}
 
 			line := blocks[j].lines[i]
 			lineLen := blocks[j].lens[i]
 
+			numSpecialChars := len(line) - lineLen
+
+			endc := min(lineLen+numSpecialChars, splitWidth+numSpecialChars)
+
 			maxFillLen := min(lineLen, splitWidth)
-			buf.WriteString(line)
+			buf.WriteString(line[:endc])
 			buf.WriteString(lineFill[:splitWidth-maxFillLen])
 		}
-		buf.WriteByte('\n')
+		if i < height-1 {
+			buf.WriteByte('\n')
+		}
 	}
 
-	return string(buf.Bytes()[:buf.Len()-1])
+	return buf.String()
 }
