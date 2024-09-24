@@ -181,6 +181,14 @@ func Variables(w io.Writer, ref int) {
 	dap.WriteProtocolMessage(w, req)
 }
 
+func Evaluate(w io.Writer, exp string) {
+	req := &dap.EvaluateRequest{Request: newRequest("evaluate")}
+	req.Arguments = dap.EvaluateArguments{
+		Expression: exp,
+	}
+	dap.WriteProtocolMessage(w, req)
+}
+
 func newRequest(command string) dap.Request {
 	req := dap.Request{}
 	req.Type = "request"

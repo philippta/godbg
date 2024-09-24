@@ -2,11 +2,14 @@ package ui
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
 	"log"
 	"net"
 	"os"
 	"os/signal"
 	"slices"
+	"strings"
 	"syscall"
 	"time"
 
@@ -33,6 +36,9 @@ func Run(program string) {
 	}
 	defer tty.Close()
 
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+
 	out := tty.Output()
 	out.Write(term.AltScreen)
 	out.Write(term.HideCursor)
@@ -44,7 +50,12 @@ func Run(program string) {
 	go listenresize(v, tty, repaintCh)
 	go paintloop(v, tty, repaintCh)
 	go daploop(v, msgs, repaintCh)
-	inputloop(v, tty, repaintCh)
+	go func() {
+		inputloop(v, tty, repaintCh)
+		cancel()
+	}()
+
+	<-ctx.Done()
 	close(repaintCh)
 }
 
@@ -66,7 +77,13 @@ func paintloop(v *view, tty *tty.TTY, repaint <-chan struct{}) {
 }
 
 func daploop(v *view, msgs <-chan godap.Message, repaint chan<- struct{}) {
+
 	for msg := range msgs {
+		debug.Logf("%T", msg)
+		b, _ := json.MarshalIndent(msg, "", "  ")
+		debug.Logf("%s", b)
+		debug.Logf("")
+
 		switch dmsg := msg.(type) {
 		case *godap.StoppedEvent:
 			v.thread = dmsg.Body.ThreadId
@@ -106,6 +123,8 @@ func inputloop(v *view, tty *tty.TTY, repaint chan<- struct{}) {
 		switch key {
 		case 'q':
 			return
+		case 'e':
+			dap.Evaluate(v.conn, "strings.a")
 		case 'k': // Move up
 			v.sourceMoveUp()
 			repaint <- struct{}{}
@@ -146,8 +165,9 @@ func render(v *view) string {
 		return ""
 	}
 
-	variables := []string{"Line1", "Line2 HELLO WORLD", "Line3"}
-	variablesLens := []int{5, 17, 5}
+	b, _ := json.MarshalIndent(v.variablesView.variables, "", "  ")
+	variables := strings.Split(string(b), "\n")
+	variablesLens := countlens(variables)
 
 	return verticalSplit(
 		v.width, v.height,
@@ -231,4 +251,12 @@ func (v *view) sourceToggleBreakpoint(i int) {
 	v.sourceView.breakpoints[v.sourceView.file] = bp
 
 	dap.BreakpointsFile(v.conn, v.sourceView.file, bp)
+}
+
+func countlens(ss []string) []int {
+	ll := make([]int, len(ss))
+	for i := range ss {
+		ll[i] = len(ss[i])
+	}
+	return ll
 }
