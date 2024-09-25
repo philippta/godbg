@@ -1,20 +1,106 @@
 package ui
 
 import (
-	"bytes"
-	"fmt"
+	"reflect"
+	"strings"
 
-	"github.com/google/go-dap"
+	"github.com/go-delve/delve/service/api"
 )
 
-func variablesRender(vars []dap.Variable) string {
+func variablesRender(vars []api.Variable, width, height int) ([]string, []int) {
 	if len(vars) == 0 {
-		return ""
-	}
-	var buf bytes.Buffer
-	for i := 0; i < len(vars); i++ {
-		buf.WriteString(fmt.Sprintf("%10s %10s\n", vars[i].Name+" "+vars[i].Type, vars[i].Value))
+		return []string{}, []int{}
 	}
 
-	return string(buf.Bytes()[:buf.Len()-1])
+	// debug.LogJSON(vars)
+
+	lines := make([]string, 0, len(vars))
+	lens := make([]int, 0, len(vars))
+	padding := strings.Repeat(" ", width)
+
+	var maxNameLen int
+	var maxTypeLen int
+	for i := range vars {
+		vars[i].Type = simpleType(vars[i].Type)
+		maxNameLen = max(maxNameLen, len(vars[i].Name))
+		maxTypeLen = max(maxTypeLen, len(vars[i].Type))
+	}
+
+	for i := range vars {
+		nameLen := len(vars[i].Name)
+		typeLen := len(vars[i].Type)
+
+		var buf strings.Builder
+		buf.WriteString(" ")
+		buf.WriteString("\033[37m")
+		buf.WriteString(vars[i].Name)
+		buf.WriteString(padding[:maxNameLen-nameLen+1])
+		buf.WriteString("\033[34m")
+		buf.WriteString(vars[i].Type)
+		buf.WriteString("\033[37m")
+		buf.WriteString(padding[:maxTypeLen-typeLen+1])
+		buf.WriteString("= ")
+		buf.WriteString(variableValue(vars[i]))
+
+		lines = append(lines, buf.String())
+		lens = append(lens, buf.Len()-15 /* ansi seq */)
+	}
+
+	return lines, lens
+}
+
+func variableValue(v api.Variable) string {
+	if v.Unreadable != "" {
+		return "???"
+	}
+
+	switch v.Kind {
+	case reflect.Slice:
+		if v.Type == "[]any" && len(v.Children) == 1 {
+			return variableValue(v.Children[0].Children[0])
+		}
+		var sb strings.Builder
+		sb.WriteString("[")
+		for i := range v.Children {
+			sb.WriteString(variableValue(v.Children[i]))
+			if i < len(v.Children)-1 {
+				sb.WriteString(", ")
+			}
+		}
+		sb.WriteByte(']')
+		return sb.String()
+	case reflect.Interface:
+		if len(v.Children) == 0 {
+			return "??? no val in interface"
+		}
+		return variableValue(v.Children[0])
+	case reflect.Struct:
+		var sb strings.Builder
+		sb.WriteString("{")
+		for i := range v.Children {
+			sb.WriteString(v.Children[i].Name)
+			sb.WriteString(": ")
+			sb.WriteString(variableValue(v.Children[i]))
+			if i < len(v.Children)-1 {
+				sb.WriteString(", ")
+			}
+		}
+		sb.WriteString("}")
+		return sb.String()
+
+	case reflect.Ptr:
+		return variableValue(v.Children[0])
+	default:
+		return v.SinglelineStringWithShortTypes()
+	}
+}
+
+func simpleType(t string) string {
+	if strings.HasSuffix(t, "interface {}") {
+		return strings.Replace(t, "interface {}", "any", 1)
+	}
+	if strings.HasPrefix(t, "struct {") {
+		return "struct"
+	}
+	return t
 }

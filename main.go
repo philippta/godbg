@@ -4,6 +4,7 @@ import (
 	"os"
 
 	"github.com/philippta/godbg/debug"
+	"github.com/philippta/godbg/dlv"
 	"github.com/philippta/godbg/ui"
 )
 
@@ -15,5 +16,11 @@ func main() {
 		program = os.Args[1]
 	}
 
-	ui.Run(program)
+	client, err := dlv.Launch(program)
+	if err != nil {
+		panic(err)
+	}
+	defer client.Detach(true)
+
+	ui.Run(client)
 }

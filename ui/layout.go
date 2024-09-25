@@ -19,6 +19,12 @@ func verticalSplit(width int, height int, blocks ...block) string {
 
 	for i := 0; i < height; i++ {
 		for j := 0; j < len(blocks); j++ {
+			splitWidth := splitWidth
+			if j > 0 {
+				buf.WriteString("\033[90m│")
+				splitWidth--
+			}
+
 			if i >= len(blocks[j].lines) {
 				buf.WriteString(lineFill[:splitWidth])
 				continue
