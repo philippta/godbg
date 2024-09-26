@@ -2,6 +2,7 @@ package ui
 
 import (
 	"reflect"
+	"strconv"
 	"strings"
 
 	"github.com/go-delve/delve/service/api"
@@ -12,7 +13,9 @@ func variablesRender(vars []api.Variable, width, height int) ([]string, []int) {
 		return []string{}, []int{}
 	}
 
-	// debug.LogJSON(vars)
+	// for _, v := range vars {
+	// 	debug.LogJSON(v)
+	// }
 
 	lines := make([]string, 0, len(vars))
 	lens := make([]int, 0, len(vars))
@@ -64,7 +67,7 @@ func variableValue(v api.Variable) string {
 		for i := range v.Children {
 			sb.WriteString(variableValue(v.Children[i]))
 			if i < len(v.Children)-1 {
-				sb.WriteString(", ")
+				sb.WriteString(",")
 			}
 		}
 		sb.WriteByte(']')
@@ -87,9 +90,61 @@ func variableValue(v api.Variable) string {
 		}
 		sb.WriteString("}")
 		return sb.String()
-
-	case reflect.Ptr:
+	case reflect.Array:
+		var sb strings.Builder
+		sb.WriteString("[")
+		for i := range v.Children {
+			sb.WriteString(variableValue(v.Children[i]))
+			if i < len(v.Children)-1 {
+				sb.WriteString(",")
+			}
+		}
+		sb.WriteByte(']')
+		return sb.String()
+	case reflect.Pointer:
 		return variableValue(v.Children[0])
+	case reflect.Map:
+		var sb strings.Builder
+		sb.WriteString("{")
+		for i := 0; i < len(v.Children); i += 2 {
+			sb.WriteString(variableValue(v.Children[i]))
+			sb.WriteString(": ")
+			sb.WriteString(variableValue(v.Children[i+1]))
+			if i < len(v.Children)-2 {
+				sb.WriteString(", ")
+			}
+		}
+		sb.WriteString("}")
+		return sb.String()
+	case reflect.Chan:
+		var buf api.Variable
+		var recvx api.Variable
+		for i := range v.Children {
+			if v.Children[i].Name == "buf" {
+				buf = v.Children[i].Children[0]
+			}
+			if v.Children[i].Name == "recvx" {
+				recvx = v.Children[i]
+			}
+		}
+		start, _ := strconv.Atoi(recvx.Value)
+
+		var sb strings.Builder
+		sb.WriteString("[")
+		for i := start; i < len(buf.Children)+start; i++ {
+			sb.WriteString(variableValue(buf.Children[i%len(buf.Children)]))
+			if i < len(buf.Children)+start-1 {
+				sb.WriteString(",")
+			}
+		}
+		sb.WriteByte(']')
+		return sb.String()
+	case reflect.UnsafePointer:
+		p, err := strconv.ParseInt(v.Value, 10, 64)
+		if err != nil {
+			return "(unknown pointer)"
+		}
+		return "0x" + strconv.FormatInt(p, 16)
 	default:
 		return v.SinglelineStringWithShortTypes()
 	}
@@ -101,6 +156,9 @@ func simpleType(t string) string {
 	}
 	if strings.HasPrefix(t, "struct {") {
 		return "struct"
+	}
+	if strings.HasPrefix(t, "func(") {
+		return "func"
 	}
 	return t
 }
