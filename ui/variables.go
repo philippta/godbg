@@ -8,17 +8,37 @@ import (
 	"github.com/go-delve/delve/service/api"
 )
 
-func variablesRender(vars []api.Variable, width, height int) ([]string, []int) {
+type variable struct {
+	Name     string
+	Value    string
+	Type     string
+	Kind     reflect.Kind
+	Children []variable
+	Expanded bool
+}
+
+func variablesRender(vars []variable, width, height int, lineCursor int) ([]string, []int) {
 	if len(vars) == 0 {
 		return []string{}, []int{}
 	}
 
-	// for _, v := range vars {
-	// 	debug.LogJSON(v)
-	// }
+	var lines []string
+	var lens []int
+	expandVariables(&lines, &lens, vars, 0)
 
-	lines := make([]string, 0, len(vars))
-	lens := make([]int, 0, len(vars))
+	for i := range lines {
+		if i == lineCursor {
+			lines[i] = "\033[32m=> " + lines[i]
+		} else {
+			lines[i] = "\033[37m   " + lines[i]
+		}
+		lens[i] += 8
+	}
+
+	return lines, lens
+
+	lines = make([]string, 0, len(vars))
+	lens = make([]int, 0, len(vars))
 	padding := strings.Repeat(" ", width)
 
 	var maxNameLen int
@@ -34,7 +54,11 @@ func variablesRender(vars []api.Variable, width, height int) ([]string, []int) {
 		typeLen := len(vars[i].Type)
 
 		var buf strings.Builder
-		buf.WriteString(" ")
+		if i == lineCursor {
+			buf.WriteString("\033[32m=> ")
+		} else {
+			buf.WriteString("\033[37m   ")
+		}
 		buf.WriteString("\033[37m")
 		buf.WriteString(vars[i].Name)
 		buf.WriteString(padding[:maxNameLen-nameLen+1])
@@ -43,13 +67,62 @@ func variablesRender(vars []api.Variable, width, height int) ([]string, []int) {
 		buf.WriteString("\033[37m")
 		buf.WriteString(padding[:maxTypeLen-typeLen+1])
 		buf.WriteString("= ")
-		buf.WriteString(variableValue(vars[i]))
+		buf.WriteString(vars[i].Value)
 
 		lines = append(lines, buf.String())
 		lens = append(lens, buf.Len()-15 /* ansi seq */)
 	}
 
 	return lines, lens
+}
+
+func expandVariables(lines *[]string, lens *[]int, vars []variable, indent int) {
+	var padding = strings.Repeat(" ", 500)
+
+	var maxNameLen int
+	for i := range vars {
+		maxNameLen = max(maxNameLen, len(vars[i].Name))
+	}
+
+	findMaxTypeLen := func(vars []variable) int {
+		var l int
+		for i := range vars {
+			l = max(l, len(vars[i].Type))
+			if vars[i].Expanded && vars[i].Children != nil {
+				break
+			}
+		}
+		return l
+	}
+
+	var maxTypeLen int
+	for i := range vars {
+		if maxTypeLen == 0 {
+			maxTypeLen = findMaxTypeLen(vars[i:])
+		}
+
+		nameLen := len(vars[i].Name)
+		typeLen := len(vars[i].Type)
+
+		var buf strings.Builder
+		buf.WriteString("\033[37m")
+		buf.WriteString(padding[:indent*4])
+		buf.WriteString(vars[i].Name)
+		buf.WriteString(padding[:maxNameLen-nameLen+1])
+		buf.WriteString("\033[34m")
+		buf.WriteString(vars[i].Type)
+		buf.WriteString(padding[:maxTypeLen-typeLen+1])
+		buf.WriteString("\033[37m")
+		buf.WriteString("= ")
+		buf.WriteString(vars[i].Value)
+		*lines = append(*lines, buf.String())
+		*lens = append(*lens, buf.Len()-15)
+
+		if vars[i].Expanded && vars[i].Children != nil {
+			expandVariables(lines, lens, vars[i].Children, indent+1)
+			maxTypeLen = 0
+		}
+	}
 }
 
 func variableValue(v api.Variable) string {
@@ -148,6 +221,72 @@ func variableValue(v api.Variable) string {
 	default:
 		return v.SinglelineStringWithShortTypes()
 	}
+}
+
+func transformVariables(vars []api.Variable) []variable {
+	out := make([]variable, len(vars))
+	for i := range vars {
+		out[i] = transformVariable(vars[i])
+	}
+	return out
+}
+
+func transformVariable(v api.Variable) variable {
+	var out variable
+	out.Name = v.Name
+	out.Value = variableValue(v)
+	out.Type = simpleType(v.Type)
+	out.Kind = v.Kind
+
+	switch v.Kind {
+	case reflect.Slice, reflect.Array:
+		for i := range v.Children {
+			nv := transformVariable(v.Children[i])
+			nv.Name = strconv.Itoa(i)
+			out.Children = append(out.Children, nv)
+		}
+	case reflect.Struct:
+		for i := range v.Children {
+			nv := transformVariable(v.Children[i])
+			out.Children = append(out.Children, nv)
+		}
+	case reflect.Map:
+		for i := 0; i < len(v.Children); i += 2 {
+			v.Children[i+1].Name = v.Children[i].Value
+			nv := transformVariable(v.Children[i+1])
+			out.Children = append(out.Children, nv)
+		}
+	case reflect.Interface:
+		// nv := transformVariable(v.Children[0])
+		// nv.Name = v.Name
+		out.Type = v.Children[0].Type
+		// out.Children = append(out.Children, nv)
+	case reflect.Chan:
+		elems := v.Children[2].Children[0]           // Index 2 holds the channel values
+		recv, _ := strconv.Atoi(v.Children[7].Value) // Index 7 holds the receive index
+		nc := transformVariable(elems).Children
+		for i := recv; i < len(nc)+recv; i++ {
+			out.Children = append(out.Children, nc[i%len(nc)])
+		}
+		for i := range out.Children {
+			out.Children[i].Name = strconv.Itoa(i)
+		}
+	}
+	return out
+}
+
+func variableLines(vars []variable) int {
+	if vars == nil {
+		return 0
+	}
+	lines := len(vars)
+	for i := range vars {
+		if vars[i].Expanded {
+			lines += variableLines(vars[i].Children)
+		}
+	}
+
+	return lines
 }
 
 func simpleType(t string) string {

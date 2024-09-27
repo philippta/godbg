@@ -18,6 +18,7 @@ import (
 func Run(dlv *rpc2.RPCClient) {
 	v := &view{}
 	v.dlv = dlv
+	v.paneNum = 2
 
 	tty, err := tty.Open()
 	if err != nil {
@@ -51,9 +52,11 @@ func Run(dlv *rpc2.RPCClient) {
 	}()
 
 	dlv.CreateBreakpoint(&api.Breakpoint{FunctionName: "main.main"})
+	dlv.CreateBreakpoint(&api.Breakpoint{File: "/Users/philipp/code/hellworld/main.go", Line: 40})
 	v.state = <-dlv.Continue()
 	v.sourceView.breakpoints, _ = dlv.ListBreakpoints(true)
 	v.sourceLoadFile()
+	v.variablesLoad()
 
 	repaintCh <- struct{}{}
 
@@ -87,33 +90,47 @@ func inputloop(v *view, tty *tty.TTY, repaint chan<- struct{}) {
 		}
 
 		switch key {
+		case '\t':
+			v.paneActive = (v.paneActive + 1) % v.paneNum
 		case 'q':
 			return
 		case 'k': // Move up
-			v.sourceMoveUp()
+			switch v.paneActive {
+			case 0:
+				v.sourceMoveUp()
+			case 1:
+				v.variablesMoveUp()
+			}
 		case 'j': // Move down
-			v.sourceMoveDown()
+			switch v.paneActive {
+			case 0:
+				v.sourceMoveDown()
+			case 1:
+				v.variablesMoveDown()
+			}
 		case 's': // Step
 			v.state, err = v.dlv.Next()
 			must(err)
 			v.sourceLoadFile()
-			v.loadVariables()
+			v.variablesLoad()
 		case 'i': // Step in
 			v.state, err = v.dlv.Step()
 			must(err)
 			v.sourceLoadFile()
-			v.loadVariables()
+			v.variablesLoad()
 		case 'o': // Step out
 			v.state, err = v.dlv.StepOut()
 			must(err)
 			v.sourceLoadFile()
-			v.loadVariables()
+			v.variablesLoad()
 		case 'c': // Continue
 			v.state = <-v.dlv.Continue()
 			v.sourceLoadFile()
-			v.loadVariables()
+			v.variablesLoad()
 		case 'b': // Breakpoint
 			v.sourceToggleBreakpoint()
+			// default:
+			// debug.Logf("%s", key)
 		}
 
 		if v.state.Exited {
@@ -144,7 +161,7 @@ func render(v *view) string {
 		return ""
 	}
 
-	variables, variablesLens := variablesRender(v.variablesView.variables, v.width/2, v.height)
+	variables, variablesLens := variablesRender(v.variablesView.variables, v.width/2, v.height, v.variablesView.lineCursor)
 
 	return verticalSplit(
 		v.width, v.height,
@@ -163,8 +180,10 @@ func listenresize(v *view, tty *tty.TTY, repaint chan<- struct{}) {
 }
 
 type view struct {
-	width  int
-	height int
+	width      int
+	height     int
+	paneActive int
+	paneNum    int
 
 	sourceView struct {
 		file        string
@@ -175,11 +194,46 @@ type view struct {
 		breakpoints []*api.Breakpoint
 	}
 	variablesView struct {
-		variables []api.Variable
+		variables  []variable
+		lineCursor int
 	}
 
 	dlv   *rpc2.RPCClient
 	state *api.DebuggerState
+}
+
+func (v *view) variablesLoad() {
+	args, err := v.dlv.ListFunctionArgs(
+		api.EvalScope{GoroutineID: v.state.CurrentThread.GoroutineID},
+		api.LoadConfig{
+			FollowPointers:     true,
+			MaxVariableRecurse: 2,
+			MaxStringLen:       100,
+			MaxArrayValues:     100,
+			MaxStructFields:    -1,
+		})
+	must(err)
+
+	locals, err := v.dlv.ListLocalVariables(
+		api.EvalScope{GoroutineID: v.state.CurrentThread.GoroutineID},
+		api.LoadConfig{
+			FollowPointers:     true,
+			MaxVariableRecurse: 2,
+			MaxStringLen:       100,
+			MaxArrayValues:     100,
+			MaxStructFields:    -1,
+		})
+	must(err)
+
+	v.variablesView.variables = transformVariables(append(args, locals...))
+}
+
+func (v *view) variablesMoveUp() {
+	v.variablesView.lineCursor = max(0, v.variablesView.lineCursor-1)
+}
+
+func (v *view) variablesMoveDown() {
+	v.variablesView.lineCursor = min(v.variablesView.lineCursor+1, len(v.variablesView.variables)-1)
 }
 
 func (v *view) sourceLoadFile() error {
@@ -209,32 +263,6 @@ func (v *view) sourceLoadFile() error {
 	}
 
 	return nil
-}
-
-func (v *view) loadVariables() {
-	args, err := v.dlv.ListFunctionArgs(
-		api.EvalScope{GoroutineID: v.state.CurrentThread.GoroutineID},
-		api.LoadConfig{
-			FollowPointers:     true,
-			MaxVariableRecurse: 2,
-			MaxStringLen:       100,
-			MaxArrayValues:     100,
-			MaxStructFields:    -1,
-		})
-	must(err)
-
-	locals, err := v.dlv.ListLocalVariables(
-		api.EvalScope{GoroutineID: v.state.CurrentThread.GoroutineID},
-		api.LoadConfig{
-			FollowPointers:     true,
-			MaxVariableRecurse: 2,
-			MaxStringLen:       100,
-			MaxArrayValues:     100,
-			MaxStructFields:    -1,
-		})
-	must(err)
-
-	v.variablesView.variables = append(args, locals...)
 }
 
 func (v *view) sourceMoveUp() {
