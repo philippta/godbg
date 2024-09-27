@@ -29,30 +29,10 @@ func TestFlattenVariables(t *testing.T) {
 	}
 
 	out := transformVariables([]api.Variable{vv[13]})
-	out[0].Expanded = true
 	// out = flattenVariables(out)
 
 	b, _ := json.MarshalIndent(out, "", "  ")
 	os.Stdout.Write(b)
-}
-
-func TestExpandVariables(t *testing.T) {
-	var vv []api.Variable
-	if err := json.Unmarshal(variablesJSON, &vv); err != nil {
-		t.Fatal(err)
-	}
-	out := transformVariables(vv)
-	for i := range out {
-		out[i].Expanded = true
-	}
-
-	var lines []string
-	var lens []int
-	expandVariables(&lines, &lens, out, 0)
-
-	for _, line := range lines {
-		fmt.Println(line)
-	}
 }
 
 var variablesJSON = []byte(`[

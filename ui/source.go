@@ -4,7 +4,7 @@ import (
 	"strings"
 )
 
-func sourceRender(lines [][]byte, width, height, lineStart, pcCursor, lineCursor int, breakpoints []int) ([]string, []int) {
+func sourceRender(lines [][]byte, width, height, lineStart, pcCursor, lineCursor int, breakpoints []int, active bool) ([]string, []int) {
 	if len(lines) == 0 {
 		return []string{}, []int{}
 	}
@@ -29,9 +29,17 @@ func sourceRender(lines [][]byte, width, height, lineStart, pcCursor, lineCursor
 	for i := lineStart; i < lineEnd; i++ {
 		// line len: 5
 		if i == pcCursor {
-			buf.WriteString("\033[93m=> ")
+			if active {
+				buf.WriteString("\033[93m=> ")
+			} else {
+				buf.WriteString("\033[90m=> ")
+			}
 		} else if i == lineCursor {
-			buf.WriteString("\033[32m=> ")
+			if active {
+				buf.WriteString("\033[32m=> ")
+			} else {
+				buf.WriteString("\033[90m=> ")
+			}
 		} else {
 			buf.WriteString("\033[0m   ")
 		}
@@ -53,7 +61,7 @@ func sourceRender(lines [][]byte, width, height, lineStart, pcCursor, lineCursor
 		ll := len(lines[i])
 
 		// line len: endc
-		if i == pcCursor {
+		if i == lineCursor && active {
 			buf.WriteString("\033[97m")
 		} else {
 			buf.WriteString("\033[37m")

@@ -54,7 +54,7 @@ func Run(dlv *rpc2.RPCClient) {
 	}()
 
 	// dlv.CreateBreakpoint(&api.Breakpoint{FunctionName: "main.main"})
-	dlv.CreateBreakpoint(&api.Breakpoint{File: "/Users/philipp/code/hellworld/main.go", Line: 24})
+	dlv.CreateBreakpoint(&api.Breakpoint{File: "/Users/philipp/code/hellworld/main.go", Line: 31})
 	v.state = <-dlv.Continue()
 	v.sourceView.breakpoints, _ = dlv.ListBreakpoints(true)
 	v.sourceLoadFile()
@@ -161,13 +161,21 @@ func render(v *view) string {
 		v.sourceView.pcCursor,
 		v.sourceView.lineCursor,
 		fileBreakpoints(v.sourceView.breakpoints, v.sourceView.file),
+		v.paneActive == 0,
 	)
 
 	if len(source) == 0 {
 		return ""
 	}
 
-	variables, variablesLens := variablesRender(v.variablesView.flattened, v.width/2, v.height, v.variablesView.lineCursor)
+	variables, variablesLens := variablesRender(
+		v.variablesView.flattened,
+		v.width/2,
+		v.height,
+		v.variablesView.lineStart,
+		v.variablesView.lineCursor,
+		v.paneActive == 1,
+	)
 
 	return verticalSplit(
 		v.width, v.height,
@@ -204,6 +212,7 @@ type view struct {
 		flattened  []variable
 		expanded   [][]string
 		lineCursor int
+		lineStart  int
 	}
 
 	dlv   *rpc2.RPCClient
@@ -240,10 +249,16 @@ func (v *view) variablesLoad() {
 
 func (v *view) variablesMoveUp() {
 	v.variablesView.lineCursor = max(0, v.variablesView.lineCursor-1)
+	if v.variablesView.lineCursor < v.variablesView.lineStart+2 {
+		v.variablesView.lineStart = max(0, v.variablesView.lineStart-1)
+	}
 }
 
 func (v *view) variablesMoveDown() {
 	v.variablesView.lineCursor = min(v.variablesView.lineCursor+1, len(v.variablesView.flattened)-1)
+	if v.variablesView.lineCursor > v.variablesView.lineStart+v.height-3 {
+		v.variablesView.lineStart = min(v.variablesView.lineStart+1, len(v.variablesView.flattened)-v.height)
+	}
 }
 
 func (v *view) variablesExpand() {

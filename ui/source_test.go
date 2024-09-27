@@ -23,6 +23,7 @@ func TestSourceRender(t *testing.T) {
 		40,
 		40,
 		nil,
+		true,
 	)
 
 	for i := range source {
@@ -43,6 +44,6 @@ func BenchmarkSourceRenderV1(b *testing.B) {
 	b.ReportAllocs()
 
 	for n := 0; n < b.N; n++ {
-		sourceRender(srcLines, 90, 49, 90, 100, 100, []int{})
+		sourceRender(srcLines, 90, 49, 90, 100, 100, []int{}, true)
 	}
 }
