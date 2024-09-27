@@ -2,6 +2,7 @@ package ui
 
 import (
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -13,8 +14,9 @@ type variable struct {
 	Value    string
 	Type     string
 	Kind     reflect.Kind
+	Path     []string
+	Indent   int
 	Children []variable
-	Expanded bool
 }
 
 func variablesRender(vars []variable, width, height int, lineCursor int) ([]string, []int) {
@@ -22,35 +24,19 @@ func variablesRender(vars []variable, width, height int, lineCursor int) ([]stri
 		return []string{}, []int{}
 	}
 
-	var lines []string
-	var lens []int
-	expandVariables(&lines, &lens, vars, 0)
-
-	for i := range lines {
-		if i == lineCursor {
-			lines[i] = "\033[32m=> " + lines[i]
-		} else {
-			lines[i] = "\033[37m   " + lines[i]
-		}
-		lens[i] += 8
-	}
-
-	return lines, lens
-
-	lines = make([]string, 0, len(vars))
-	lens = make([]int, 0, len(vars))
+	lines := make([]string, 0, len(vars))
+	lens := make([]int, 0, len(vars))
 	padding := strings.Repeat(" ", width)
 
 	var maxNameLen int
 	var maxTypeLen int
 	for i := range vars {
-		vars[i].Type = simpleType(vars[i].Type)
-		maxNameLen = max(maxNameLen, len(vars[i].Name))
+		maxNameLen = max(maxNameLen, len(vars[i].Name)+vars[i].Indent*2)
 		maxTypeLen = max(maxTypeLen, len(vars[i].Type))
 	}
 
 	for i := range vars {
-		nameLen := len(vars[i].Name)
+		nameLen := len(vars[i].Name) + vars[i].Indent*2
 		typeLen := len(vars[i].Type)
 
 		var buf strings.Builder
@@ -59,6 +45,7 @@ func variablesRender(vars []variable, width, height int, lineCursor int) ([]stri
 		} else {
 			buf.WriteString("\033[37m   ")
 		}
+		buf.WriteString(padding[:vars[i].Indent*2])
 		buf.WriteString("\033[37m")
 		buf.WriteString(vars[i].Name)
 		buf.WriteString(padding[:maxNameLen-nameLen+1])
@@ -76,54 +63,56 @@ func variablesRender(vars []variable, width, height int, lineCursor int) ([]stri
 	return lines, lens
 }
 
-func expandVariables(lines *[]string, lens *[]int, vars []variable, indent int) {
-	var padding = strings.Repeat(" ", 500)
-
-	var maxNameLen int
-	for i := range vars {
-		maxNameLen = max(maxNameLen, len(vars[i].Name))
-	}
-
-	findMaxTypeLen := func(vars []variable) int {
-		var l int
-		for i := range vars {
-			l = max(l, len(vars[i].Type))
-			if vars[i].Expanded && vars[i].Children != nil {
-				break
-			}
-		}
-		return l
-	}
-
-	var maxTypeLen int
-	for i := range vars {
-		if maxTypeLen == 0 {
-			maxTypeLen = findMaxTypeLen(vars[i:])
-		}
-
-		nameLen := len(vars[i].Name)
-		typeLen := len(vars[i].Type)
-
-		var buf strings.Builder
-		buf.WriteString("\033[37m")
-		buf.WriteString(padding[:indent*4])
-		buf.WriteString(vars[i].Name)
-		buf.WriteString(padding[:maxNameLen-nameLen+1])
-		buf.WriteString("\033[34m")
-		buf.WriteString(vars[i].Type)
-		buf.WriteString(padding[:maxTypeLen-typeLen+1])
-		buf.WriteString("\033[37m")
-		buf.WriteString("= ")
-		buf.WriteString(vars[i].Value)
-		*lines = append(*lines, buf.String())
-		*lens = append(*lens, buf.Len()-15)
-
-		if vars[i].Expanded && vars[i].Children != nil {
-			expandVariables(lines, lens, vars[i].Children, indent+1)
-			maxTypeLen = 0
-		}
-	}
-}
+// func expandVariables(lines *[]string, lens *[]int, vars []variable, visible []string, indent int) {
+// 	var padding = strings.Repeat(" ", 500)
+//
+// 	var maxNameLen int
+// 	for i := range vars {
+// 		maxNameLen = max(maxNameLen, len(vars[i].Name))
+// 	}
+//
+// 	findMaxTypeLen := func(vars []variable) int {
+// 		var l int
+// 		for i := range vars {
+// 			l = max(l, len(vars[i].Type))
+// 			if slices.Contains(visible, vars[i].Path) && vars[i].Children != nil {
+// 				break
+// 			}
+// 		}
+// 		return l
+// 	}
+//
+// 	var maxTypeLen int
+// 	for i := range vars {
+// 		if maxTypeLen == 0 {
+// 			maxTypeLen = findMaxTypeLen(vars[i:])
+// 		}
+//
+// 		nameLen := len(vars[i].Name)
+// 		typeLen := len(vars[i].Type)
+// 		_ = nameLen
+// 		_ = typeLen
+//
+// 		var buf strings.Builder
+// 		buf.WriteString("\033[37m")
+// 		buf.WriteString(padding[:indent*4])
+// 		buf.WriteString(vars[i].Name)
+// 		// buf.WriteString(padding[:maxNameLen-nameLen+1])
+// 		buf.WriteString("\033[34m")
+// 		buf.WriteString(vars[i].Type)
+// 		// buf.WriteString(padding[:maxTypeLen-typeLen+1])
+// 		buf.WriteString("\033[37m")
+// 		buf.WriteString("= ")
+// 		buf.WriteString(vars[i].Value)
+// 		*lines = append(*lines, buf.String())
+// 		*lens = append(*lens, buf.Len()-15)
+//
+// 		if vars[i].Expanded && vars[i].Children != nil {
+// 			expandVariables(lines, lens, vars[i].Children, visible, indent+1)
+// 			maxTypeLen = 0
+// 		}
+// 	}
+// }
 
 func variableValue(v api.Variable) string {
 	if v.Unreadable != "" {
@@ -223,70 +212,79 @@ func variableValue(v api.Variable) string {
 	}
 }
 
+func flattenVariables(vars []variable, expandedVars [][]string) []variable {
+	var out []variable
+
+	expanded := func(path []string) bool {
+		for i := range expandedVars {
+			if slices.Equal(expandedVars[i], path) {
+				return true
+			}
+		}
+		return false
+	}
+
+	var flatten func([]variable, int)
+	flatten = func(vars []variable, indent int) {
+		for i := range vars {
+			vars[i].Indent = indent
+			out = append(out, vars[i])
+
+			if expanded(vars[i].Path) {
+				flatten(vars[i].Children, indent+1)
+			}
+		}
+	}
+
+	flatten(vars, 0)
+	return out
+}
+
 func transformVariables(vars []api.Variable) []variable {
 	out := make([]variable, len(vars))
 	for i := range vars {
-		out[i] = transformVariable(vars[i])
+		out[i] = transformVariable(vars[i], nil)
 	}
 	return out
 }
 
-func transformVariable(v api.Variable) variable {
+func transformVariable(v api.Variable, path []string) variable {
 	var out variable
 	out.Name = v.Name
 	out.Value = variableValue(v)
 	out.Type = simpleType(v.Type)
 	out.Kind = v.Kind
+	out.Path = append(path, v.Name)
 
 	switch v.Kind {
 	case reflect.Slice, reflect.Array:
 		for i := range v.Children {
-			nv := transformVariable(v.Children[i])
-			nv.Name = strconv.Itoa(i)
+			v.Children[i].Name = strconv.Itoa(i)
+			nv := transformVariable(v.Children[i], out.Path)
 			out.Children = append(out.Children, nv)
 		}
 	case reflect.Struct:
 		for i := range v.Children {
-			nv := transformVariable(v.Children[i])
+			nv := transformVariable(v.Children[i], out.Path)
 			out.Children = append(out.Children, nv)
 		}
 	case reflect.Map:
 		for i := 0; i < len(v.Children); i += 2 {
 			v.Children[i+1].Name = v.Children[i].Value
-			nv := transformVariable(v.Children[i+1])
+			nv := transformVariable(v.Children[i+1], out.Path)
 			out.Children = append(out.Children, nv)
 		}
 	case reflect.Interface:
-		// nv := transformVariable(v.Children[0])
-		// nv.Name = v.Name
 		out.Type = v.Children[0].Type
-		// out.Children = append(out.Children, nv)
 	case reflect.Chan:
-		elems := v.Children[2].Children[0]           // Index 2 holds the channel values
+		elems := v.Children[2].Children[0].Children  // Index 2 holds the channel values
 		recv, _ := strconv.Atoi(v.Children[7].Value) // Index 7 holds the receive index
-		nc := transformVariable(elems).Children
-		for i := recv; i < len(nc)+recv; i++ {
-			out.Children = append(out.Children, nc[i%len(nc)])
-		}
-		for i := range out.Children {
-			out.Children[i].Name = strconv.Itoa(i)
+		for i := recv; i < len(elems)+recv; i++ {
+			elems[i%len(elems)].Name = strconv.Itoa(i - recv)
+			out.Children = append(out.Children, transformVariable(elems[i%len(elems)], out.Path))
 		}
 	}
 	return out
-}
-
-func variableLines(vars []variable) int {
-	if vars == nil {
-		return 0
-	}
-	lines := len(vars)
-	for i := range vars {
-		if vars[i].Expanded {
-			lines += variableLines(vars[i].Children)
-		}
-	}
-
-	return lines
 }
 
 func simpleType(t string) string {

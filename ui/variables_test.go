@@ -15,12 +15,25 @@ func TestTransformVariables(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out := transformVariable(vv[13])
+	out := transformVariable(vv[16], nil)
 	b, _ := json.MarshalIndent(out, "", "  ")
 	os.Stdout.Write(b)
 
 	fmt.Println()
-	fmt.Println(variableLines([]variable{out}))
+}
+
+func TestFlattenVariables(t *testing.T) {
+	var vv []api.Variable
+	if err := json.Unmarshal(variablesJSON, &vv); err != nil {
+		t.Fatal(err)
+	}
+
+	out := transformVariables([]api.Variable{vv[13]})
+	out[0].Expanded = true
+	// out = flattenVariables(out)
+
+	b, _ := json.MarshalIndent(out, "", "  ")
+	os.Stdout.Write(b)
 }
 
 func TestExpandVariables(t *testing.T) {
