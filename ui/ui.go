@@ -266,7 +266,16 @@ func (v *view) variablesExpand() {
 	if hl.Children == nil {
 		return
 	}
-	v.variablesView.expanded = append(v.variablesView.expanded, hl.Path)
+	var found bool
+	for i := range v.variablesView.expanded {
+		if slices.Equal(v.variablesView.expanded[i], hl.Path) {
+			found = true
+			break
+		}
+	}
+	if !found {
+		v.variablesView.expanded = append(v.variablesView.expanded, hl.Path)
+	}
 	v.variablesView.flattened = flattenVariables(v.variablesView.variables, v.variablesView.expanded)
 }
 

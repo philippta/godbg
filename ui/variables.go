@@ -175,8 +175,10 @@ func variableValue(v api.Variable) string {
 			return "(unknown pointer)"
 		}
 		return "0x" + strconv.FormatInt(p, 16)
+	case reflect.String:
+		return "\"" + v.Value + "\""
 	default:
-		return v.SinglelineStringWithShortTypes()
+		return v.Value
 	}
 }
 
