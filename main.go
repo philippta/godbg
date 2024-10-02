@@ -14,7 +14,7 @@ func main() {
 	args := os.Args[1:]
 
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "Usage: godbg <debug|test> [path] [func regex]")
+		fmt.Fprintln(os.Stderr, "Usage: godbg <debug|test|exec> [path] [func regex]")
 		return
 	}
 
@@ -43,6 +43,19 @@ func main() {
 		}
 
 		dbg, err := dlv.Test(path, funcExpr)
+		if err != nil {
+			panic(err)
+		}
+		defer dbg.Close()
+
+		ui.Run(dbg)
+	case "exec":
+		if len(args) < 2 {
+			fmt.Fprintln(os.Stderr, "Usage: godbg <debug|test|exec> [path] [func regex]")
+			return
+		}
+		path := args[1]
+		dbg, err := dlv.Exec(path)
 		if err != nil {
 			panic(err)
 		}

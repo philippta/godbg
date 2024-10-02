@@ -3,6 +3,7 @@ package ui
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"log"
 	"os"
 	"os/signal"
@@ -134,6 +135,11 @@ func inputloop(v *view, tty *tty.TTY, repaint chan<- struct{}) {
 			v.sourceToggleBreakpoint()
 			// default:
 			// debug.Logf("%s", key)
+		case 'v':
+			vars, err := v.dbg.Variables()
+			must(err)
+			b, _ := json.MarshalIndent(vars, "", "  ")
+			os.WriteFile("ui/testdata/vars.json", b, 0o644)
 		}
 
 		if v.dbg.Exited() {
@@ -205,6 +211,8 @@ type view struct {
 		breakpoints []*api.Breakpoint
 	}
 	variablesView struct {
+		rawvars []api.Variable
+
 		variables  []variable
 		flattened  []variable
 		expanded   [][]string
@@ -218,7 +226,7 @@ type view struct {
 func (v *view) variablesLoad() {
 	vars, err := v.dbg.Variables()
 	must(err)
-
+	v.variablesView.rawvars = vars
 	v.variablesView.variables = transformVariables(vars)
 	v.variablesView.flattened = flattenVariables(v.variablesView.variables, v.variablesView.expanded)
 }
