@@ -295,12 +295,16 @@ func (v *view) sourceLoadFile() {
 
 		v.sourceView.lines = bytes.Split(src, []byte{'\n'})
 		v.sourceView.file = path
-	}
-	v.sourceView.pcCursor = line - 1
-	v.sourceView.lineCursor = line - 1
-
-	if v.sourceView.lineCursor < v.sourceView.lineStart+2 || v.sourceView.lineCursor > v.sourceView.lineStart+v.height-3 {
+		v.sourceView.pcCursor = line - 1
+		v.sourceView.lineCursor = line - 1
 		v.sourceView.lineStart = max(0, min(line-1-v.height/2, len(v.sourceView.lines)-1-v.height))
+	} else {
+		v.sourceView.pcCursor = line - 1
+		v.sourceView.lineCursor = line - 1
+
+		if v.sourceView.lineCursor < v.sourceView.lineStart+2 || v.sourceView.lineCursor > v.sourceView.lineStart+v.height-3 {
+			v.sourceView.lineStart = max(0, min(line-1-v.height/2, len(v.sourceView.lines)-1-v.height))
+		}
 	}
 }
 

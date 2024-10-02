@@ -132,6 +132,9 @@ func variableValue(v api.Variable) string {
 		sb.WriteByte(']')
 		return sb.String()
 	case reflect.Pointer:
+		if len(v.Children) == 0 {
+			return "???"
+		}
 		return variableValue(v.Children[0])
 	case reflect.Map:
 		var sb strings.Builder
