@@ -5,11 +5,9 @@ import (
 	"path/filepath"
 
 	"github.com/go-delve/delve/pkg/proc"
-	"github.com/go-delve/delve/service"
 	"github.com/go-delve/delve/service/api"
 	"github.com/go-delve/delve/service/debugger"
-	"github.com/go-delve/delve/service/rpc2"
-	"github.com/go-delve/delve/service/rpccommon"
+	"github.com/philippta/godbg/build"
 )
 
 type Debugger struct {
@@ -17,7 +15,101 @@ type Debugger struct {
 	state *api.DebuggerState
 }
 
-func Open(program string) (*Debugger, error) {
+func Test(path string, funcExpr string) (*Debugger, error) {
+	binpath, err := build.Test(path)
+	if err != nil {
+		return nil, fmt.Errorf("build test executable: %w", err)
+	}
+
+	pkg, err := build.PackageInfo(path)
+	if err != nil {
+		return nil, fmt.Errorf("package info: %w", err)
+	}
+
+	funcs, err := build.TestFunctions(binpath, funcExpr)
+	if err != nil {
+		return nil, fmt.Errorf("package info: %w", err)
+	}
+
+	cfg := &debugger.Config{
+		WorkingDir:     filepath.Dir(path),
+		Backend:        "default",
+		ExecuteKind:    debugger.ExecutingGeneratedTest,
+		CheckGoVersion: true,
+		Stdout: proc.OutputRedirect{
+			Path: "/dev/null",
+		},
+		Stderr: proc.OutputRedirect{
+			Path: "/dev/null",
+		},
+	}
+
+	processArgs := []string{binpath}
+	if funcExpr != "" {
+		processArgs = append(processArgs, "-test.run", funcExpr)
+	}
+	dbg, err := debugger.New(cfg, processArgs)
+	if err != nil {
+		return nil, fmt.Errorf("start debugger :%w", err)
+	}
+
+	d := &Debugger{dbg: dbg, state: &api.DebuggerState{}}
+	for _, f := range funcs {
+		if err := d.CreateFunctionBreakpoint(pkg.ImportPath + "." + f); err != nil {
+			if err := d.CreateFunctionBreakpoint(pkg.ImportPath + "_test." + f); err != nil {
+				panic(err)
+			}
+		}
+	}
+	d.Continue()
+
+	return d, nil
+}
+
+func Build(path string, args []string) (*Debugger, error) {
+	pkg, err := build.PackageInfo(path)
+	if err != nil {
+		return nil, fmt.Errorf("package info: %w", err)
+	}
+	if pkg.Name != "main" {
+		return nil, fmt.Errorf("package is not main")
+	}
+
+	binpath, err := build.Build(path)
+	if err != nil {
+		return nil, fmt.Errorf("build executable: %w", err)
+	}
+
+	cfg := &debugger.Config{
+		WorkingDir:     filepath.Dir(path),
+		Backend:        "default",
+		ExecuteKind:    debugger.ExecutingGeneratedFile,
+		CheckGoVersion: true,
+		Stdout: proc.OutputRedirect{
+			Path: "/dev/null",
+		},
+		Stderr: proc.OutputRedirect{
+			Path: "/dev/null",
+		},
+	}
+
+	processArgs := []string{binpath}
+	processArgs = append(processArgs, args...)
+	dbg, err := debugger.New(cfg, processArgs)
+	if err != nil {
+		return nil, fmt.Errorf("start debugger :%w", err)
+	}
+
+	d := &Debugger{dbg: dbg, state: &api.DebuggerState{}}
+	if err := d.CreateFunctionBreakpoint("main.main"); err != nil {
+		panic(err)
+	}
+	d.Continue()
+
+	return d, nil
+}
+
+func Exec(program string) (*Debugger, error) {
 	cfg := &debugger.Config{
 		WorkingDir:     filepath.Dir(program),
 		Backend:        "default",
@@ -35,7 +127,11 @@ func Open(program string) (*Debugger, error) {
 		return nil, fmt.Errorf("start debugger :%w", err)
 	}
 
-	return &Debugger{dbg: dbg, state: &api.DebuggerState{}}, nil
+	d := &Debugger{dbg: dbg, state: &api.DebuggerState{}}
+	d.CreateFunctionBreakpoint("main.main")
+	d.Continue()
+
+	return d, nil
 }
 
 func (d *Debugger) Step() error {
@@ -127,33 +223,4 @@ func (d *Debugger) Location() (string, int) {
 
 func (d *Debugger) Close() error {
 	return d.dbg.Detach(true)
-}
-
-func Launch(program string) (*rpc2.RPCClient, error) {
-	listener, clientConn := service.ListenerPipe()
-	defer listener.Close()
-
-	server := rpccommon.NewServer(&service.Config{
-		Listener:    listener,
-		ProcessArgs: []string{program},
-		APIVersion:  2,
-		Debugger: debugger.Config{
-			WorkingDir:     filepath.Dir(program),
-			Backend:        "default",
-			ExecuteKind:    debugger.ExecutingExistingFile,
-			CheckGoVersion: true,
-			Stdout: proc.OutputRedirect{
-				Path: "/dev/null",
-			},
-			Stderr: proc.OutputRedirect{
-				Path: "/dev/null",
-			},
-		},
-	})
-	if err := server.Run(); err != nil {
-		return nil, err
-	}
-
-	client := rpc2.NewClientFromConn(clientConn)
-	return client, nil
 }

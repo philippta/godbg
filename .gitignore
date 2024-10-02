@@ -1,2 +1,4 @@
 debug.log
 *.pprof
+godbg.bin
+godbg.test
