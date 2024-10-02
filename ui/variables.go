@@ -248,7 +248,9 @@ func transformVariable(v api.Variable, path []string) variable {
 			out.Children = append(out.Children, nv)
 		}
 	case reflect.Interface:
-		out.Type = v.Children[0].Type
+		if len(v.Children) > 0 {
+			out.Type = v.Children[0].Type
+		}
 	case reflect.Chan:
 		elems := v.Children[2].Children[0].Children  // Index 2 holds the channel values
 		recv, _ := strconv.Atoi(v.Children[7].Value) // Index 7 holds the receive index

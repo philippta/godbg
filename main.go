@@ -16,11 +16,11 @@ func main() {
 		program = os.Args[1]
 	}
 
-	client, err := dlv.Launch(program)
+	dbg, err := dlv.Open(program)
 	if err != nil {
 		panic(err)
 	}
-	defer client.Detach(true)
+	defer dbg.Close()
 
-	ui.Run(client)
+	ui.Run(dbg)
 }

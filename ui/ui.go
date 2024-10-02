@@ -10,14 +10,14 @@ import (
 	"syscall"
 
 	"github.com/go-delve/delve/service/api"
-	"github.com/go-delve/delve/service/rpc2"
 	"github.com/mattn/go-tty"
+	"github.com/philippta/godbg/dlv"
 	"github.com/philippta/godbg/term"
 )
 
-func Run(dlv *rpc2.RPCClient) {
+func Run(dbg *dlv.Debugger) {
 	v := &view{}
-	v.dlv = dlv
+	v.dbg = dbg
 	v.paneNum = 2
 
 	tty, err := tty.Open()
@@ -53,10 +53,10 @@ func Run(dlv *rpc2.RPCClient) {
 		cancel()
 	}()
 
-	// dlv.CreateBreakpoint(&api.Breakpoint{FunctionName: "main.main"})
-	dlv.CreateBreakpoint(&api.Breakpoint{File: "/Users/philipp/code/hellworld/main.go", Line: 31})
-	v.state = <-dlv.Continue()
-	v.sourceView.breakpoints, _ = dlv.ListBreakpoints(true)
+	// v.dbg.CreateFunctionBreakpoint("main.main")
+	v.dbg.CreateFileBreakpoint("/Users/philipp/code/hellworld/main.go", 31)
+	v.dbg.Continue()
+	v.sourceView.breakpoints = v.dbg.Breakpoints()
 	v.sourceLoadFile()
 	v.variablesLoad()
 
@@ -115,22 +115,19 @@ func inputloop(v *view, tty *tty.TTY, repaint chan<- struct{}) {
 		case 'h': // Collapse
 			v.variablesCollapse()
 		case 's': // Step
-			v.state, err = v.dlv.Next()
-			must(err)
+			must(v.dbg.Step())
 			v.sourceLoadFile()
 			v.variablesLoad()
 		case 'i': // Step in
-			v.state, err = v.dlv.Step()
-			must(err)
+			must(v.dbg.StepIn())
 			v.sourceLoadFile()
 			v.variablesLoad()
 		case 'o': // Step out
-			v.state, err = v.dlv.StepOut()
-			must(err)
+			must(v.dbg.StepOut())
 			v.sourceLoadFile()
 			v.variablesLoad()
 		case 'c': // Continue
-			v.state = <-v.dlv.Continue()
+			must(v.dbg.Continue())
 			v.sourceLoadFile()
 			v.variablesLoad()
 		case 'b': // Breakpoint
@@ -139,7 +136,7 @@ func inputloop(v *view, tty *tty.TTY, repaint chan<- struct{}) {
 			// debug.Logf("%s", key)
 		}
 
-		if v.state.Exited {
+		if v.dbg.Exited() {
 			return
 		}
 
@@ -215,35 +212,14 @@ type view struct {
 		lineStart  int
 	}
 
-	dlv   *rpc2.RPCClient
-	state *api.DebuggerState
+	dbg *dlv.Debugger
 }
 
 func (v *view) variablesLoad() {
-	args, err := v.dlv.ListFunctionArgs(
-		api.EvalScope{GoroutineID: v.state.CurrentThread.GoroutineID},
-		api.LoadConfig{
-			FollowPointers:     true,
-			MaxVariableRecurse: 2,
-			MaxStringLen:       100,
-			MaxArrayValues:     100,
-			MaxStructFields:    -1,
-		})
+	vars, err := v.dbg.Variables()
 	must(err)
 
-	locals, err := v.dlv.ListLocalVariables(
-		api.EvalScope{GoroutineID: v.state.CurrentThread.GoroutineID},
-		api.LoadConfig{
-			FollowPointers:     true,
-			MaxVariableRecurse: 2,
-			MaxStringLen:       100,
-			MaxArrayValues:     100,
-			MaxStructFields:    -1,
-		})
-	must(err)
-
-	vars := transformVariables(append(args, locals...))
-	v.variablesView.variables = vars
+	v.variablesView.variables = transformVariables(vars)
 	v.variablesView.flattened = flattenVariables(v.variablesView.variables, v.variablesView.expanded)
 }
 
@@ -305,19 +281,15 @@ func (v *view) variablesCollapse() {
 	v.variablesView.flattened = flattenVariables(v.variablesView.variables, v.variablesView.expanded)
 }
 
-func (v *view) sourceLoadFile() error {
-	if v.state.CurrentThread == nil {
-		return nil
+func (v *view) sourceLoadFile() {
+	path, line := v.dbg.Location()
+	if path == "" {
+		return
 	}
-
-	path := v.state.CurrentThread.File
-	line := v.state.CurrentThread.Line
 
 	if v.sourceView.file != path {
 		src, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
+		must(err)
 
 		src = bytes.ReplaceAll(src, []byte{'\t'}, []byte("    "))
 
@@ -330,8 +302,6 @@ func (v *view) sourceLoadFile() error {
 	if v.sourceView.lineCursor < v.sourceView.lineStart+2 || v.sourceView.lineCursor > v.sourceView.lineStart+v.height-3 {
 		v.sourceView.lineStart = max(0, min(line-1-v.height/2, len(v.sourceView.lines)-1-v.height))
 	}
-
-	return nil
 }
 
 func (v *view) sourceMoveUp() {
@@ -358,18 +328,12 @@ func (v *view) sourceToggleBreakpoint() {
 	}
 
 	if activeBP == nil {
-		v.dlv.CreateBreakpoint(&api.Breakpoint{
-			File: v.sourceView.file,
-			Line: v.sourceView.lineCursor + 1,
-		})
+		v.dbg.CreateFileBreakpoint(v.sourceView.file, v.sourceView.lineCursor+1)
 	} else {
-		_, err := v.dlv.ClearBreakpoint(activeBP.ID)
-		must(err)
+		v.dbg.ClearBreakpoint(activeBP.ID)
 	}
 
-	var err error
-	v.sourceView.breakpoints, err = v.dlv.ListBreakpoints(true)
-	must(err)
+	v.sourceView.breakpoints = v.dbg.Breakpoints()
 }
 
 func fileBreakpoints(bps []*api.Breakpoint, file string) []int {
