@@ -3,15 +3,15 @@ package ui
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"log"
 	"os"
 	"os/signal"
-	"slices"
 	"syscall"
+	"time"
 
 	"github.com/go-delve/delve/service/api"
 	"github.com/mattn/go-tty"
+	"github.com/philippta/godbg/debug"
 	"github.com/philippta/godbg/dlv"
 	"github.com/philippta/godbg/term"
 )
@@ -113,30 +113,28 @@ func inputloop(v *view, tty *tty.TTY, repaint chan<- struct{}) {
 		case 'h': // Collapse
 			v.variablesCollapse()
 		case 's': // Step
-			must(v.dbg.Step())
+			v.dbg.Step()
 			v.sourceLoadFile()
 			v.variablesLoad()
 		case 'i': // Step in
-			must(v.dbg.StepIn())
+			v.dbg.StepIn()
 			v.sourceLoadFile()
 			v.variablesLoad()
 		case 'o': // Step out
-			must(v.dbg.StepOut())
+			v.dbg.StepOut()
 			v.sourceLoadFile()
 			v.variablesLoad()
 		case 'c': // Continue
-			must(v.dbg.Continue())
+			v.dbg.Continue()
 			v.sourceLoadFile()
 			v.variablesLoad()
 		case 'b': // Breakpoint
 			v.sourceToggleBreakpoint()
-			// default:
-			// debug.Logf("%s", key)
-		case 'v':
-			vars, err := v.dbg.Variables()
-			must(err)
-			b, _ := json.MarshalIndent(vars, "", "  ")
-			os.WriteFile("ui/testdata/vars.json", b, 0o644)
+			// case 'v':
+			// 	vars, err := v.dbg.Variables()
+			// 	must(err)
+			// 	b, _ := json.MarshalIndent(vars, "", "  ")
+			// 	os.WriteFile("ui/testdata/vars.json", b, 0o644)
 		}
 
 		if v.dbg.Exited() {
@@ -148,10 +146,10 @@ func inputloop(v *view, tty *tty.TTY, repaint chan<- struct{}) {
 }
 
 func render(v *view) string {
-	// start := time.Now()
-	// defer func() {
-	// 	debug.Logf("Render time: %v", time.Since(start))
-	// }()
+	start := time.Now()
+	defer func() {
+		debug.Logf("Render time: %v", time.Since(start))
+	}()
 
 	source, sourceLens := sourceRender(
 		v.sourceView.lines,
@@ -169,7 +167,8 @@ func render(v *view) string {
 	}
 
 	variables, variablesLens := variablesRender(
-		v.variablesView.flattened,
+		v.variablesView.variables,
+		&v.variablesView.expanded,
 		v.width/2,
 		v.height,
 		v.variablesView.lineStart,
@@ -208,11 +207,10 @@ type view struct {
 		breakpoints []*api.Breakpoint
 	}
 	variablesView struct {
-		rawvars []api.Variable
+		variables    []variable
+		expanded     []expansion
+		visibleCount int
 
-		variables  []variable
-		flattened  []variable
-		expanded   [][]string
 		lineCursor int
 		lineStart  int
 	}
@@ -223,9 +221,8 @@ type view struct {
 func (v *view) variablesLoad() {
 	vars, err := v.dbg.Variables()
 	must(err)
-	v.variablesView.rawvars = vars
 	v.variablesView.variables = transformVariables(vars)
-	v.variablesView.flattened = flattenVariables(v.variablesView.variables, v.variablesView.expanded)
+	v.variablesView.visibleCount = countVisibleVariables(v.variablesView.variables, &v.variablesView.expanded)
 }
 
 func (v *view) variablesMoveUp() {
@@ -236,54 +233,20 @@ func (v *view) variablesMoveUp() {
 }
 
 func (v *view) variablesMoveDown() {
-	v.variablesView.lineCursor = min(v.variablesView.lineCursor+1, len(v.variablesView.flattened)-1)
+	v.variablesView.lineCursor = min(v.variablesView.lineCursor+1, v.variablesView.visibleCount-1)
 	if v.variablesView.lineCursor > v.variablesView.lineStart+v.height-3 {
-		v.variablesView.lineStart = min(v.variablesView.lineStart+1, len(v.variablesView.flattened)-v.height)
+		v.variablesView.lineStart = min(v.variablesView.lineStart+1, v.variablesView.visibleCount-v.height)
 	}
 }
 
 func (v *view) variablesExpand() {
-	hl := v.variablesView.flattened[v.variablesView.lineCursor]
-	if hl.Children == nil {
-		return
-	}
-	var found bool
-	for i := range v.variablesView.expanded {
-		if slices.Equal(v.variablesView.expanded[i], hl.Path) {
-			found = true
-			break
-		}
-	}
-	if !found {
-		v.variablesView.expanded = append(v.variablesView.expanded, hl.Path)
-	}
-	v.variablesView.flattened = flattenVariables(v.variablesView.variables, v.variablesView.expanded)
+	changeVariableExpansion(v.variablesView.variables, &v.variablesView.expanded, v.variablesView.lineCursor, true)
+	v.variablesView.visibleCount = countVisibleVariables(v.variablesView.variables, &v.variablesView.expanded)
 }
 
 func (v *view) variablesCollapse() {
-	path := v.variablesView.flattened[v.variablesView.lineCursor].Path
-
-	for len(path) > 0 {
-		exists := slices.ContainsFunc(v.variablesView.expanded, func(p []string) bool {
-			return slices.Equal(p, path)
-		})
-		if exists {
-			break
-		} else {
-			path = path[:len(path)-1]
-		}
-	}
-
-	for i := range v.variablesView.flattened {
-		if slices.Equal(v.variablesView.flattened[i].Path, path) {
-			v.variablesView.lineCursor = i
-		}
-	}
-
-	v.variablesView.expanded = slices.DeleteFunc(v.variablesView.expanded, func(p []string) bool {
-		return slices.Equal(p, path)
-	})
-	v.variablesView.flattened = flattenVariables(v.variablesView.variables, v.variablesView.expanded)
+	changeVariableExpansion(v.variablesView.variables, &v.variablesView.expanded, v.variablesView.lineCursor, false)
+	v.variablesView.visibleCount = countVisibleVariables(v.variablesView.variables, &v.variablesView.expanded)
 }
 
 func (v *view) sourceLoadFile() {
@@ -303,6 +266,8 @@ func (v *view) sourceLoadFile() {
 		v.sourceView.pcCursor = line - 1
 		v.sourceView.lineCursor = line - 1
 		v.sourceView.lineStart = max(0, min(line-1-v.height/2, len(v.sourceView.lines)-1-v.height))
+		v.variablesView.lineCursor = 0
+		v.variablesView.lineStart = 0
 	} else {
 		v.sourceView.pcCursor = line - 1
 		v.sourceView.lineCursor = line - 1

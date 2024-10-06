@@ -2,7 +2,6 @@ package ui
 
 import (
 	"reflect"
-	"slices"
 	"strconv"
 	"strings"
 
@@ -14,203 +13,80 @@ type variable struct {
 	Value    string
 	Type     string
 	Kind     reflect.Kind
-	Path     []string
 	Indent   int
 	Children []variable
 }
 
-func variablesRender(vars []variable, width, height, lineStart, lineCursor int, active bool) ([]string, []int) {
+type expansion struct {
+	Name     string
+	Children []expansion
+}
+
+func variablesRender(vars []variable, expanded *[]expansion, width, height, lineStart, lineCursor int, active bool) ([]string, []int) {
 	if len(vars) == 0 {
 		return []string{}, []int{}
 	}
 
-	lineCursor = lineCursor - lineStart
-	vars = vars[lineStart:]
-
 	lines := make([]string, 0, len(vars))
 	lens := make([]int, 0, len(vars))
+	linecount := 0
 	padding := strings.Repeat(" ", width)
 
-	var maxNameLen int
-	var maxTypeLen int
-	for i := range vars {
-		maxNameLen = max(maxNameLen, len(vars[i].Name)+vars[i].Indent*2)
-		maxTypeLen = max(maxTypeLen, len(vars[i].Type))
-	}
+	var buf strings.Builder
+	var render func(vars []variable, indent int, expanded *[]expansion)
+	render = func(vars []variable, indent int, expanded *[]expansion) {
+		maxNameLen := 0
+		for i := range vars {
+			maxNameLen = max(maxNameLen, len(vars[i].Name))
+		}
 
-	for i := range vars {
-		nameLen := len(vars[i].Name) + vars[i].Indent*2
-		typeLen := len(vars[i].Type)
+		for i := range vars {
+			if linecount >= lineStart {
+				buf.Reset()
+				if linecount == lineCursor {
+					if active {
+						buf.WriteString("\033[32m=> ")
+					} else {
+						buf.WriteString("\033[90m=> ")
+					}
+				} else {
+					buf.WriteString("\033[37m   ")
+				}
 
-		var buf strings.Builder
-		if i == lineCursor {
-			if active {
-				buf.WriteString("\033[32m=> ")
-			} else {
-				buf.WriteString("\033[90m=> ")
+				for i := 0; i < indent; i++ {
+					buf.WriteString("  ")
+				}
+
+				buf.WriteString("\033[34m")
+				buf.WriteString(vars[i].Name)
+
+				if linecount == lineCursor && active {
+					buf.WriteString("\033[97m")
+				} else {
+					buf.WriteString("\033[37m")
+				}
+				buf.WriteString(padding[:maxNameLen-len(vars[i].Name)])
+				buf.WriteString(" = ")
+				buf.WriteString(vars[i].Value)
+
+				lines = append(lines, buf.String())
+				lens = append(lens, buf.Len()-15 /* ansi seq */)
 			}
-		} else {
-			buf.WriteString("\033[37m   ")
+
+			linecount++
+
+			if vars[i].Children != nil {
+				if exp, ok := findExpansion(vars[i].Name, expanded); ok {
+					render(vars[i].Children, indent+1, exp)
+				}
+			}
+
 		}
-		buf.WriteString(padding[:vars[i].Indent*2])
-
-		if i == lineCursor && active {
-			buf.WriteString("\033[97m")
-		} else {
-			buf.WriteString("\033[37m")
-		}
-
-		buf.WriteString(vars[i].Name)
-		buf.WriteString(padding[:maxNameLen-nameLen+1])
-		buf.WriteString("\033[34m")
-		buf.WriteString(vars[i].Type)
-
-		if i == lineCursor && active {
-			buf.WriteString("\033[97m")
-		} else {
-			buf.WriteString("\033[37m")
-		}
-
-		buf.WriteString(padding[:maxTypeLen-typeLen+1])
-		buf.WriteString("= ")
-		buf.WriteString(vars[i].Value)
-
-		lines = append(lines, buf.String())
-		lens = append(lens, buf.Len()-15 /* ansi seq */)
 	}
+
+	render(vars, 0, expanded)
 
 	return lines, lens
-}
-
-func variableValue(v api.Variable) string {
-	if v.Unreadable != "" {
-		return "???"
-	}
-
-	switch v.Kind {
-	case reflect.Slice:
-		if v.Type == "[]any" && len(v.Children) == 1 {
-			return variableValue(v.Children[0].Children[0])
-		}
-		var sb strings.Builder
-		sb.WriteString("[")
-		for i := range v.Children {
-			sb.WriteString(variableValue(v.Children[i]))
-			if i < len(v.Children)-1 {
-				sb.WriteString(",")
-			}
-		}
-		sb.WriteByte(']')
-		return sb.String()
-	case reflect.Interface:
-		if len(v.Children) == 0 {
-			return "??? no val in interface"
-		}
-		return variableValue(v.Children[0])
-	case reflect.Struct:
-		var sb strings.Builder
-		sb.WriteString("{")
-		for i := range v.Children {
-			sb.WriteString(v.Children[i].Name)
-			sb.WriteString(": ")
-			sb.WriteString(variableValue(v.Children[i]))
-			if i < len(v.Children)-1 {
-				sb.WriteString(", ")
-			}
-		}
-		sb.WriteString("}")
-		return sb.String()
-	case reflect.Array:
-		var sb strings.Builder
-		sb.WriteString("[")
-		for i := range v.Children {
-			sb.WriteString(variableValue(v.Children[i]))
-			if i < len(v.Children)-1 {
-				sb.WriteString(",")
-			}
-		}
-		sb.WriteByte(']')
-		return sb.String()
-	case reflect.Pointer:
-		if len(v.Children) == 0 {
-			return "???"
-		}
-		return variableValue(v.Children[0])
-	case reflect.Map:
-		var sb strings.Builder
-		sb.WriteString("{")
-		for i := 0; i < len(v.Children); i += 2 {
-			sb.WriteString(variableValue(v.Children[i]))
-			sb.WriteString(": ")
-			sb.WriteString(variableValue(v.Children[i+1]))
-			if i < len(v.Children)-2 {
-				sb.WriteString(", ")
-			}
-		}
-		sb.WriteString("}")
-		return sb.String()
-	case reflect.Chan:
-		var buf api.Variable
-		var recvx api.Variable
-		for i := range v.Children {
-			if v.Children[i].Name == "buf" {
-				buf = v.Children[i].Children[0]
-			}
-			if v.Children[i].Name == "recvx" {
-				recvx = v.Children[i]
-			}
-		}
-		start, _ := strconv.Atoi(recvx.Value)
-
-		var sb strings.Builder
-		sb.WriteString("[")
-		for i := start; i < len(buf.Children)+start; i++ {
-			sb.WriteString(variableValue(buf.Children[i%len(buf.Children)]))
-			if i < len(buf.Children)+start-1 {
-				sb.WriteString(",")
-			}
-		}
-		sb.WriteByte(']')
-		return sb.String()
-	case reflect.UnsafePointer:
-		p, err := strconv.ParseInt(v.Value, 10, 64)
-		if err != nil {
-			return "(unknown pointer)"
-		}
-		return "0x" + strconv.FormatInt(p, 16)
-	case reflect.String:
-		return "\"" + v.Value + "\""
-	default:
-		return v.Value
-	}
-}
-
-func flattenVariables(vars []variable, expandedVars [][]string) []variable {
-	var out []variable
-
-	expanded := func(path []string) bool {
-		for i := range expandedVars {
-			if slices.Equal(expandedVars[i], path) {
-				return true
-			}
-		}
-		return false
-	}
-
-	var flatten func([]variable, int)
-	flatten = func(vars []variable, indent int) {
-		for i := range vars {
-			vars[i].Indent = indent
-			out = append(out, vars[i])
-
-			if expanded(vars[i].Path) {
-				flatten(vars[i].Children, indent+1)
-			}
-		}
-	}
-
-	flatten(vars, 0)
-	return out
 }
 
 func transformVariables(vars []api.Variable) []variable {
@@ -264,12 +140,7 @@ func transformVariables(vars []api.Variable) []variable {
 				if vars[i].Children[0].Type == "void" {
 					out[i].Value = "<nil>"
 				} else {
-					if vars[i].Children[0].Kind == reflect.String {
-						out[i].Value = "\"" + vars[i].Children[0].Value + "\""
-					} else {
-						out[i].Value = vars[i].Children[0].Value
-					}
-
+					out[i].Value = vars[i].Children[0].Value
 					out[i].Type = simpleType(vars[i].Children[0].Type)
 					out[i].Kind = vars[i].Children[0].Kind
 					if len(vars[i].Children[0].Children) > 0 {
@@ -371,4 +242,60 @@ func simpleType(t string) string {
 func prettyPointer(p string) string {
 	i, _ := strconv.ParseInt(p, 10, 64)
 	return "0x" + strconv.FormatInt(i, 16)
+}
+
+func findExpansion(varname string, expanded *[]expansion) (*[]expansion, bool) {
+	for i := range *expanded {
+		if (*expanded)[i].Name == varname {
+			return &((*expanded)[i].Children), true
+		}
+	}
+	return nil, false
+}
+
+func changeVariableExpansion(vars []variable, expansions *[]expansion, index int, expand bool) {
+	count := 0
+
+	var f func(vars []variable, expansions *[]expansion, index int) bool
+	f = func(vars []variable, expansions *[]expansion, index int) bool {
+		for _, v := range vars {
+			if count == index {
+				if expand {
+					*expansions = append(*expansions, expansion{Name: v.Name})
+				} else {
+					for i := range *expansions {
+						if (*expansions)[i].Name == v.Name {
+							*expansions = append((*expansions)[:i], (*expansions)[i+1:]...)
+							break
+						}
+					}
+				}
+				return true
+			}
+			count++
+
+			if v.Children != nil {
+				if exp, ok := findExpansion(v.Name, expansions); ok {
+					if f(v.Children, exp, index) {
+						return true
+					}
+				}
+			}
+		}
+
+		return false
+	}
+	f(vars, expansions, index)
+}
+
+func countVisibleVariables(vars []variable, expanded *[]expansion) int {
+	sum := len(vars)
+	for i := range vars {
+		if vars[i].Children != nil {
+			if exp, ok := findExpansion(vars[i].Name, expanded); ok {
+				sum += countVisibleVariables(vars[i].Children, exp)
+			}
+		}
+	}
+	return sum
 }
