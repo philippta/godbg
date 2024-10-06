@@ -54,9 +54,6 @@ func Run(dbg *dlv.Debugger) {
 		cancel()
 	}()
 
-	// v.dbg.CreateFunctionBreakpoint("main.main")
-	// v.dbg.CreateFileBreakpoint("/Users/philipp/code/hellworld/main.go", 31)
-	// v.dbg.Continue()
 	v.sourceView.breakpoints = v.dbg.Breakpoints()
 	v.sourceLoadFile()
 	v.variablesLoad()
