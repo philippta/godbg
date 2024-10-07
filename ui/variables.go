@@ -8,6 +8,152 @@ import (
 	"github.com/go-delve/delve/service/api"
 )
 
+type variable2 struct {
+	Name     string
+	Value    string
+	Type     string
+	Kind     reflect.Kind
+	Path     []string
+	Depth    int
+	HasChild bool
+}
+
+func flattenVariables(vars []api.Variable) []variable2 {
+	var flat []variable2
+
+	var flatten func(v api.Variable, path []string, depth int)
+	flatten = func(v api.Variable, path []string, depth int) {
+		flat = append(flat, variable2{
+			Name:     v.Name,
+			Type:     v.Type,
+			Value:    v.Value,
+			Kind:     v.Kind,
+			Path:     path,
+			Depth:    depth,
+			HasChild: len(v.Children) > 0,
+		})
+
+		for _, child := range v.Children {
+			childPath := append(path, child.Name)
+			flatten(child, childPath, depth+1)
+		}
+	}
+
+	for _, v := range vars {
+		flatten(v, []string{v.Name}, 0)
+	}
+
+	return flat
+}
+
+func pathKey(path []string) string {
+	return strings.Join(path, ".")
+}
+
+func isVariableVisible(v variable2, exp map[string]bool) bool {
+	if v.Depth == 0 {
+		return true
+	}
+
+	for i := 1; i < len(v.Path); i++ {
+		parentPath := v.Path[:i]
+		if !exp[pathKey(parentPath)] {
+			return false
+		}
+	}
+
+	return true
+}
+
+func expandVariable(vars []variable2, cursor int, exp map[string]bool) {
+	count := 0
+	for _, v := range vars {
+		if !isVariableVisible(v, exp) {
+			continue
+		}
+
+		if count == cursor {
+			if v.HasChild {
+				exp[pathKey(v.Path)] = true
+			}
+			break
+		}
+		count++
+	}
+}
+
+func collapseVariable(vars []variable2, cursor *int, exp map[string]bool) {
+	count := 0
+	for _, v := range vars {
+		if !isVariableVisible(v, exp) {
+			continue
+		}
+
+		if count == *cursor {
+			currPathKey := pathKey(v.Path)
+
+			if _, ok := exp[currPathKey]; ok {
+				delete(exp, currPathKey)
+			} else {
+				parentPath := v.Path[:max(len(v.Path)-1, 1)]
+				parentPathKey := pathKey(parentPath)
+
+				delete(exp, parentPathKey)
+
+				newcursor := 0
+				for _, w := range vars {
+					if !isVariableVisible(w, exp) {
+						continue
+					}
+					if len(w.Path) == len(parentPath) && pathKey(w.Path) == parentPathKey {
+						break
+					}
+					newcursor++
+				}
+				*cursor = newcursor
+			}
+			break
+		}
+		count++
+	}
+}
+
+func renderVariables2(vars []variable2, exp map[string]bool, width, height, linestart, cursor int, active bool) ([]string, []int) {
+	var buf strings.Builder
+	var linenum int
+	var lines []string
+	var lens []int
+
+	for _, v := range vars {
+		if !isVariableVisible(v, exp) {
+			continue
+		}
+
+		buf.Reset()
+		buf.WriteString("\033[37m")
+		if linenum == cursor {
+			buf.WriteString("=> ")
+		} else {
+			buf.WriteString("   ")
+		}
+
+		for i := 0; i < v.Depth; i++ {
+			buf.WriteString("  ")
+		}
+
+		buf.WriteString(v.Name)
+		buf.WriteString(" = ")
+		buf.WriteString(v.Value)
+
+		linenum++
+
+		lines = append(lines, buf.String())
+		lens = append(lens, buf.Len()-5)
+	}
+
+	return lines, lens
+}
+
 type variable struct {
 	Name     string
 	Value    string
@@ -110,7 +256,7 @@ func transformVariables(vars []api.Variable) []variable {
 				out[i].Value = "0"
 			}
 		case reflect.String:
-			out[i].Value = "\"" + out[i].Value + "\""
+			out[i].Value = "\"" + vars[i].Value + "\""
 		case reflect.Func:
 			if out[i].Value == "" {
 				out[i].Value = "<nil>"

@@ -20,6 +20,7 @@ func Run(dbg *dlv.Debugger) {
 	v := &view{}
 	v.dbg = dbg
 	v.paneNum = 2
+	v.variablesView.exp = map[string]bool{}
 
 	tty, err := tty.Open()
 	if err != nil {
@@ -166,9 +167,9 @@ func render(v *view) string {
 		return ""
 	}
 
-	variables, variablesLens := variablesRender(
-		v.variablesView.variables,
-		&v.variablesView.expanded,
+	variables, variablesLens := renderVariables2(
+		v.variablesView.flatvars,
+		v.variablesView.exp,
 		v.width/2,
 		v.height,
 		v.variablesView.lineStart,
@@ -207,6 +208,9 @@ type view struct {
 		breakpoints []*api.Breakpoint
 	}
 	variablesView struct {
+		flatvars []variable2
+		exp      map[string]bool
+
 		variables    []variable
 		expanded     []expansion
 		visibleCount int
@@ -221,8 +225,10 @@ type view struct {
 func (v *view) variablesLoad() {
 	vars, err := v.dbg.Variables()
 	must(err)
-	v.variablesView.variables = transformVariables(vars)
-	v.variablesView.visibleCount = countVisibleVariables(v.variablesView.variables, &v.variablesView.expanded)
+	v.variablesView.flatvars = flattenVariables(vars)
+
+	// v.variablesView.variables = transformVariables(vars)
+	// v.variablesView.visibleCount = countVisibleVariables(v.variablesView.variables, &v.variablesView.expanded)
 }
 
 func (v *view) variablesMoveUp() {
@@ -233,20 +239,25 @@ func (v *view) variablesMoveUp() {
 }
 
 func (v *view) variablesMoveDown() {
-	v.variablesView.lineCursor = min(v.variablesView.lineCursor+1, v.variablesView.visibleCount-1)
-	if v.variablesView.lineCursor > v.variablesView.lineStart+v.height-3 {
-		v.variablesView.lineStart = min(v.variablesView.lineStart+1, v.variablesView.visibleCount-v.height)
-	}
+	v.variablesView.lineCursor++
+	// v.variablesView.lineCursor = min(v.variablesView.lineCursor+1, v.variablesView.visibleCount-1)
+	// if v.variablesView.lineCursor > v.variablesView.lineStart+v.height-3 {
+	// 	v.variablesView.lineStart = min(v.variablesView.lineStart+1, v.variablesView.visibleCount-v.height)
+	// }
 }
 
 func (v *view) variablesExpand() {
-	changeVariableExpansion(v.variablesView.variables, &v.variablesView.expanded, v.variablesView.lineCursor, true)
-	v.variablesView.visibleCount = countVisibleVariables(v.variablesView.variables, &v.variablesView.expanded)
+	expandVariable(v.variablesView.flatvars, v.variablesView.lineCursor, v.variablesView.exp)
+	debug.LogJSON(v.variablesView.exp)
+	// changeVariableExpansion(v.variablesView.variables, &v.variablesView.expanded, v.variablesView.lineCursor, true)
+	// v.variablesView.visibleCount = countVisibleVariables(v.variablesView.variables, &v.variablesView.expanded)
 }
 
 func (v *view) variablesCollapse() {
-	changeVariableExpansion(v.variablesView.variables, &v.variablesView.expanded, v.variablesView.lineCursor, false)
-	v.variablesView.visibleCount = countVisibleVariables(v.variablesView.variables, &v.variablesView.expanded)
+	collapseVariable(v.variablesView.flatvars, &v.variablesView.lineCursor, v.variablesView.exp)
+	debug.LogJSON(v.variablesView.exp)
+	// changeVariableExpansion(v.variablesView.variables, &v.variablesView.expanded, v.variablesView.lineCursor, false)
+	// v.variablesView.visibleCount = countVisibleVariables(v.variablesView.variables, &v.variablesView.expanded)
 }
 
 func (v *view) sourceLoadFile() {
