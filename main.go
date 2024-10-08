@@ -9,12 +9,15 @@ import (
 	"github.com/philippta/godbg/ui"
 )
 
+const usage = "Usage: godbg <debug|test|exec> [path] [func regex]"
+
 func main() {
+
 	debug.Truncate()
 	args := os.Args[1:]
 
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "Usage: godbg <debug|test|exec> [path] [func regex]")
+		fmt.Fprintln(os.Stderr, usage)
 		return
 	}
 
@@ -51,7 +54,7 @@ func main() {
 		ui.Run(dbg)
 	case "exec":
 		if len(args) < 2 {
-			fmt.Fprintln(os.Stderr, "Usage: godbg <debug|test|exec> [path] [func regex]")
+			fmt.Fprintln(os.Stderr, usage)
 			return
 		}
 		path := args[1]

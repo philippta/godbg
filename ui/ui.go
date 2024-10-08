@@ -170,7 +170,7 @@ func render(v *view) string {
 	variables, variablesLens := renderVariables2(
 		v.variablesView.flatvars,
 		v.variablesView.exp,
-		v.width/2,
+		v.width/2-1,
 		v.height,
 		v.variablesView.lineStart,
 		v.variablesView.lineCursor,
@@ -208,13 +208,9 @@ type view struct {
 		breakpoints []*api.Breakpoint
 	}
 	variablesView struct {
-		flatvars []variable2
-		exp      map[string]bool
-
-		variables    []variable
-		expanded     []expansion
-		visibleCount int
-
+		flatvars   []variable2
+		exp        map[string]bool
+		visible    int
 		lineCursor int
 		lineStart  int
 	}
@@ -225,10 +221,18 @@ type view struct {
 func (v *view) variablesLoad() {
 	vars, err := v.dbg.Variables()
 	must(err)
-	v.variablesView.flatvars = flattenVariables(vars)
+	v.variablesView.flatvars = flattenVariables(fillValues(vars))
+	v.variablesView.visible = visibleVariables(v.variablesView.flatvars, v.variablesView.exp)
 
-	// v.variablesView.variables = transformVariables(vars)
-	// v.variablesView.visibleCount = countVisibleVariables(v.variablesView.variables, &v.variablesView.expanded)
+	// TODO: not working. no idea why
+	// if v.variablesView.lineCursor < v.variablesView.lineStart {
+	// 	if v.variablesView.visible > v.height {
+	// 		v.variablesView.lineStart = v.variablesView.lineCursor
+	// 	} else {
+	// 		v.variablesView.lineStart = 0
+	// 	}
+	//
+	// }
 }
 
 func (v *view) variablesMoveUp() {
@@ -239,25 +243,28 @@ func (v *view) variablesMoveUp() {
 }
 
 func (v *view) variablesMoveDown() {
-	v.variablesView.lineCursor++
-	// v.variablesView.lineCursor = min(v.variablesView.lineCursor+1, v.variablesView.visibleCount-1)
-	// if v.variablesView.lineCursor > v.variablesView.lineStart+v.height-3 {
-	// 	v.variablesView.lineStart = min(v.variablesView.lineStart+1, v.variablesView.visibleCount-v.height)
-	// }
+	v.variablesView.lineCursor = min(v.variablesView.lineCursor+1, v.variablesView.visible-1)
+	if v.variablesView.lineCursor > v.variablesView.lineStart+v.height-3 {
+		v.variablesView.lineStart = min(v.variablesView.lineStart+1, v.variablesView.visible-v.height)
+	}
 }
 
 func (v *view) variablesExpand() {
 	expandVariable(v.variablesView.flatvars, v.variablesView.lineCursor, v.variablesView.exp)
-	debug.LogJSON(v.variablesView.exp)
-	// changeVariableExpansion(v.variablesView.variables, &v.variablesView.expanded, v.variablesView.lineCursor, true)
-	// v.variablesView.visibleCount = countVisibleVariables(v.variablesView.variables, &v.variablesView.expanded)
+	v.variablesView.visible = visibleVariables(v.variablesView.flatvars, v.variablesView.exp)
 }
 
 func (v *view) variablesCollapse() {
 	collapseVariable(v.variablesView.flatvars, &v.variablesView.lineCursor, v.variablesView.exp)
-	debug.LogJSON(v.variablesView.exp)
-	// changeVariableExpansion(v.variablesView.variables, &v.variablesView.expanded, v.variablesView.lineCursor, false)
-	// v.variablesView.visibleCount = countVisibleVariables(v.variablesView.variables, &v.variablesView.expanded)
+	v.variablesView.visible = visibleVariables(v.variablesView.flatvars, v.variablesView.exp)
+	if v.variablesView.lineCursor < v.variablesView.lineStart {
+		if v.variablesView.visible > v.height {
+			v.variablesView.lineStart = v.variablesView.lineCursor
+		} else {
+			v.variablesView.lineStart = 0
+		}
+
+	}
 }
 
 func (v *view) sourceLoadFile() {

@@ -171,6 +171,10 @@ func (d *Debugger) Continue() error {
 }
 
 func (d *Debugger) Variables() ([]api.Variable, error) {
+	if d.state.CurrentThread == nil {
+		return []api.Variable{}, nil
+	}
+
 	cfg := proc.LoadConfig{
 		FollowPointers:     true,
 		MaxVariableRecurse: 1,
