@@ -1,27 +1,17 @@
 package ui
 
 import (
-	"bytes"
 	"context"
 	"log"
-	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
-	"github.com/go-delve/delve/service/api"
 	"github.com/mattn/go-tty"
-	"github.com/philippta/godbg/debug"
 	"github.com/philippta/godbg/dlv"
 	"github.com/philippta/godbg/term"
 )
 
 func Run(dbg *dlv.Debugger) {
-	v := &view{}
-	v.dbg = dbg
-	v.paneNum = 2
-	v.variablesView.exp = map[string]bool{}
-
 	tty, err := tty.Open()
 	if err != nil {
 		log.Fatal(err)
@@ -31,61 +21,102 @@ func Run(dbg *dlv.Debugger) {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	out := tty.Output()
-	out.Write(term.AltScreen)
-	out.Write(term.HideCursor)
-	defer out.Write(term.ShowCursor)
-	defer out.Write(term.ExitAltScreen)
-	resize(v, tty)
+	v := &View{
+		dbg:        dbg,
+		tty:        tty,
+		paneNum:    2,
+		paneActive: 0,
+		repaint:    make(chan struct{}),
+	}
+	v.Init()
+	defer v.Close()
 
-	repaintCh := make(chan struct{})
-	go listenresize(v, tty, repaintCh)
-	go paintloop(v, tty, repaintCh)
 	go func() {
-		defer func() {
-			if err := recover(); err != nil {
-				out.Write(term.ShowCursor)
-				out.Write(term.ExitAltScreen)
-				tty.Close()
-				panic(err)
-			}
-		}()
-
-		inputloop(v, tty, repaintCh)
+		v.InputLoop()
 		cancel()
 	}()
 
-	v.sourceView.breakpoints = v.dbg.Breakpoints()
-	v.sourceLoadFile()
-	v.variablesLoad()
-
-	repaintCh <- struct{}{}
-
 	<-ctx.Done()
-	close(repaintCh)
 }
 
-func resize(v *view, tty *tty.TTY) {
-	width, height, err := tty.Size()
-	if err != nil {
-		panic(err)
-	}
+type View struct {
+	tty     *tty.TTY
+	repaint chan struct{}
+
+	width      int
+	height     int
+	paneActive int
+	paneNum    int
+
+	sourceView    Source
+	variablesView Variables
+
+	dbg *dlv.Debugger
+}
+
+func (v *View) Init() {
+	out := v.tty.Output()
+	out.Write(term.AltScreen)
+	out.Write(term.HideCursor)
+
+	w, h, _ := v.tty.Size()
+	v.Resize(w, h)
+
+	go v.ResizeLoop()
+	go v.RepaintLoop()
+
+	v.sourceView.InitBreakpoints(v.dbg)
+	v.sourceLoadFile()
+	v.variablesView.Load(v.dbg, v.height)
+
+	v.Repaint()
+}
+
+func (v *View) Close() {
+	out := v.tty.Output()
+	out.Write(term.ShowCursor)
+	out.Write(term.ExitAltScreen)
+	v.tty.Close()
+	close(v.repaint)
+}
+
+func (v *View) Resize(width, height int) {
 	v.width = width
 	v.height = height
+	v.sourceView.Resize(width/2, height)
+	v.variablesView.Resize(width/2-1, height)
 }
 
-func paintloop(v *view, tty *tty.TTY, repaint <-chan struct{}) {
-	out := tty.Output()
-	for range repaint {
-		out.Write(term.ResetCursor)
-		out.WriteString(render(v))
+func (v *View) ResizeLoop() {
+	for size := range v.tty.SIGWINCH() {
+		v.Resize(size.W, size.H)
+		v.repaint <- struct{}{}
 	}
 }
 
-func inputloop(v *view, tty *tty.TTY, repaint chan<- struct{}) {
+func (v *View) Repaint() {
+	v.repaint <- struct{}{}
+}
+
+func (v *View) RepaintLoop() {
+	for range v.repaint {
+		out := v.tty.Output()
+		out.Write(term.ResetCursor)
+		out.WriteString(v.Render())
+	}
+}
+
+func (v *View) InputLoop() {
+	defer func() {
+		if err := recover(); err != nil {
+			v.Close()
+			panic(err)
+		}
+	}()
+
 	for {
 		var err error
-		key, err := tty.ReadRune()
+		key, err := v.tty.ReadRune()
 		if err != nil {
 			panic(err)
 		}
@@ -98,39 +129,39 @@ func inputloop(v *view, tty *tty.TTY, repaint chan<- struct{}) {
 		case 'k': // Move up
 			switch v.paneActive {
 			case 0:
-				v.sourceMoveUp()
+				v.sourceView.MoveUp(v.height)
 			case 1:
-				v.variablesMoveUp()
+				v.variablesView.MoveUp()
 			}
 		case 'j': // Move down
 			switch v.paneActive {
 			case 0:
-				v.sourceMoveDown()
+				v.sourceView.MoveDown(v.height)
 			case 1:
-				v.variablesMoveDown()
+				v.variablesView.MoveDown()
 			}
 		case 'l': // Expand
-			v.variablesExpand()
+			v.variablesView.Expand()
 		case 'h': // Collapse
-			v.variablesCollapse()
+			v.variablesView.Collapse(v.height)
 		case 's': // Step
 			v.dbg.Step()
 			v.sourceLoadFile()
-			v.variablesLoad()
+			v.variablesView.Load(v.dbg, v.height)
 		case 'i': // Step in
 			v.dbg.StepIn()
 			v.sourceLoadFile()
-			v.variablesLoad()
+			v.variablesView.Load(v.dbg, v.height)
 		case 'o': // Step out
 			v.dbg.StepOut()
 			v.sourceLoadFile()
-			v.variablesLoad()
+			v.variablesView.Load(v.dbg, v.height)
 		case 'c': // Continue
 			v.dbg.Continue()
 			v.sourceLoadFile()
-			v.variablesLoad()
+			v.variablesView.Load(v.dbg, v.height)
 		case 'b': // Breakpoint
-			v.sourceToggleBreakpoint()
+			v.sourceView.ToggleBreakpoint(v.dbg)
 			// case 'v':
 			// 	vars, err := v.dbg.Variables()
 			// 	must(err)
@@ -142,40 +173,22 @@ func inputloop(v *view, tty *tty.TTY, repaint chan<- struct{}) {
 			return
 		}
 
-		repaint <- struct{}{}
+		v.Repaint()
 	}
 }
 
-func render(v *view) string {
-	start := time.Now()
-	defer func() {
-		debug.Logf("Render time: %v", time.Since(start))
-	}()
+func (v *View) Render() string {
+	// start := time.Now()
+	// defer func() {
+	// 	debug.Logf("Render time: %v", time.Since(start))
+	// }()
 
-	source, sourceLens := sourceRender(
-		v.sourceView.lines,
-		v.width/2,
-		v.height,
-		v.sourceView.lineStart,
-		v.sourceView.pcCursor,
-		v.sourceView.lineCursor,
-		fileBreakpoints(v.sourceView.breakpoints, v.sourceView.file),
-		v.paneActive == 0,
-	)
-
+	source, sourceLens := v.sourceView.Render(v.paneActive == 0)
 	if len(source) == 0 {
 		return ""
 	}
 
-	variables, variablesLens := renderVariables2(
-		v.variablesView.flatvars,
-		v.variablesView.exp,
-		v.width/2-1,
-		v.height,
-		v.variablesView.lineStart,
-		v.variablesView.lineCursor,
-		v.paneActive == 1,
-	)
+	variables, variablesLens := v.variablesView.Render(v.paneActive == 1)
 
 	return verticalSplit(
 		v.width, v.height,
@@ -184,166 +197,20 @@ func render(v *view) string {
 	)
 }
 
-func listenresize(v *view, tty *tty.TTY, repaint chan<- struct{}) {
-	ch := make(chan os.Signal, 1)
-	signal.Notify(ch, syscall.SIGWINCH)
-	for range ch {
-		resize(v, tty)
+func listenresize(v *View, tty *tty.TTY, repaint chan<- struct{}) {
+	for size := range tty.SIGWINCH() {
+		v.width = size.W
+		v.height = size.H
+		v.variablesView.Resize(size.W, size.H)
 		repaint <- struct{}{}
 	}
 }
 
-type view struct {
-	width      int
-	height     int
-	paneActive int
-	paneNum    int
-
-	sourceView struct {
-		file        string
-		lines       [][]byte
-		lineStart   int
-		lineCursor  int
-		pcCursor    int
-		breakpoints []*api.Breakpoint
+func (v *View) sourceLoadFile() {
+	changed := v.sourceView.LoadLocation(v.dbg, v.height)
+	if changed {
+		v.variablesView.ResetCursor(v.height)
 	}
-	variablesView struct {
-		flatvars   []variable2
-		exp        map[string]bool
-		visible    int
-		lineCursor int
-		lineStart  int
-	}
-
-	dbg *dlv.Debugger
-}
-
-func (v *view) variablesLoad() {
-	vars, err := v.dbg.Variables()
-	must(err)
-	v.variablesView.flatvars = flattenVariables(fillValues(vars))
-	v.variablesView.visible = visibleVariables(v.variablesView.flatvars, v.variablesView.exp)
-
-	// TODO: not working. no idea why
-	// if v.variablesView.lineCursor < v.variablesView.lineStart {
-	// 	if v.variablesView.visible > v.height {
-	// 		v.variablesView.lineStart = v.variablesView.lineCursor
-	// 	} else {
-	// 		v.variablesView.lineStart = 0
-	// 	}
-	//
-	// }
-}
-
-func (v *view) variablesMoveUp() {
-	v.variablesView.lineCursor = max(0, v.variablesView.lineCursor-1)
-	if v.variablesView.lineCursor < v.variablesView.lineStart+2 {
-		v.variablesView.lineStart = max(0, v.variablesView.lineStart-1)
-	}
-}
-
-func (v *view) variablesMoveDown() {
-	v.variablesView.lineCursor = min(v.variablesView.lineCursor+1, v.variablesView.visible-1)
-	if v.variablesView.lineCursor > v.variablesView.lineStart+v.height-3 {
-		v.variablesView.lineStart = min(v.variablesView.lineStart+1, v.variablesView.visible-v.height)
-	}
-}
-
-func (v *view) variablesExpand() {
-	expandVariable(v.variablesView.flatvars, v.variablesView.lineCursor, v.variablesView.exp)
-	v.variablesView.visible = visibleVariables(v.variablesView.flatvars, v.variablesView.exp)
-}
-
-func (v *view) variablesCollapse() {
-	collapseVariable(v.variablesView.flatvars, &v.variablesView.lineCursor, v.variablesView.exp)
-	v.variablesView.visible = visibleVariables(v.variablesView.flatvars, v.variablesView.exp)
-	if v.variablesView.lineCursor < v.variablesView.lineStart {
-		if v.variablesView.visible > v.height {
-			v.variablesView.lineStart = v.variablesView.lineCursor
-		} else {
-			v.variablesView.lineStart = 0
-		}
-
-	}
-}
-
-func (v *view) sourceLoadFile() {
-	path, line := v.dbg.Location()
-	if path == "" {
-		return
-	}
-
-	if v.sourceView.file != path {
-		src, err := os.ReadFile(path)
-		must(err)
-
-		src = bytes.ReplaceAll(src, []byte{'\t'}, []byte("    "))
-
-		v.sourceView.lines = bytes.Split(src, []byte{'\n'})
-		v.sourceView.file = path
-		v.sourceView.pcCursor = line - 1
-		v.sourceView.lineCursor = line - 1
-		v.sourceView.lineStart = max(0, min(line-1-v.height/2, len(v.sourceView.lines)-1-v.height))
-		v.variablesView.lineCursor = 0
-		v.variablesView.lineStart = 0
-	} else {
-		v.sourceView.pcCursor = line - 1
-		v.sourceView.lineCursor = line - 1
-
-		if v.sourceView.lineCursor < v.sourceView.lineStart+2 || v.sourceView.lineCursor > v.sourceView.lineStart+v.height-3 {
-			v.sourceView.lineStart = max(0, min(line-1-v.height/2, len(v.sourceView.lines)-1-v.height))
-		}
-	}
-}
-
-func (v *view) sourceMoveUp() {
-	v.sourceView.lineCursor = max(0, v.sourceView.lineCursor-1)
-	if v.sourceView.lineCursor < v.sourceView.lineStart+2 {
-		v.sourceView.lineStart = max(0, v.sourceView.lineStart-1)
-	}
-}
-
-func (v *view) sourceMoveDown() {
-	v.sourceView.lineCursor = min(v.sourceView.lineCursor+1, len(v.sourceView.lines)-2)
-	if v.sourceView.lineCursor > v.sourceView.lineStart+v.height-3 {
-		v.sourceView.lineStart = min(v.sourceView.lineStart+1, len(v.sourceView.lines)-1-v.height)
-	}
-}
-
-func (v *view) sourceToggleBreakpoint() {
-	var activeBP *api.Breakpoint
-	for _, bp := range v.sourceView.breakpoints {
-		if bp.File == v.sourceView.file && bp.Line == v.sourceView.lineCursor+1 {
-			activeBP = bp
-			break
-		}
-	}
-
-	if activeBP == nil {
-		v.dbg.CreateFileBreakpoint(v.sourceView.file, v.sourceView.lineCursor+1)
-	} else {
-		v.dbg.ClearBreakpoint(activeBP.ID)
-	}
-
-	v.sourceView.breakpoints = v.dbg.Breakpoints()
-}
-
-func fileBreakpoints(bps []*api.Breakpoint, file string) []int {
-	var lineNums []int
-	for _, bp := range bps {
-		if bp.File == file {
-			lineNums = append(lineNums, bp.Line-1)
-		}
-	}
-	return lineNums
-}
-
-func countlens(ss []string) []int {
-	ll := make([]int, len(ss))
-	for i := range ss {
-		ll[i] = len(ss[i])
-	}
-	return ll
 }
 
 func must(err error) {

@@ -6,9 +6,88 @@ import (
 	"strings"
 
 	"github.com/go-delve/delve/service/api"
+	"github.com/philippta/godbg/dlv"
 )
 
-type variable2 struct {
+type Variables struct {
+	Width      int
+	Height     int
+	Variables  []variable
+	Expanded   map[string]bool
+	NumVisible int
+	LineCursor int
+	LineStart  int
+}
+
+func (v *Variables) Resize(w, h int) {
+	v.Width, v.Height = w, h
+}
+
+func (v *Variables) Load(dbg *dlv.Debugger, viewHeight int) {
+	vars, err := dbg.Variables()
+	must(err)
+	v.Variables = flattenVariables(fillValues(vars))
+	v.NumVisible = visibleVariables(v.Variables, v.Expanded)
+	v.AlignCursor()
+}
+
+func (v *Variables) MoveUp() {
+	v.LineCursor = max(0, v.LineCursor-1)
+	v.AlignCursor()
+}
+
+func (v *Variables) MoveDown() {
+	v.LineCursor = min(v.LineCursor+1, v.NumVisible-1)
+	v.AlignCursor()
+}
+
+func (v *Variables) AlignCursor() {
+	if v.LineCursor < v.LineStart+2 {
+		v.LineStart = max(0, v.LineCursor-2)
+	}
+	if v.LineCursor > v.LineStart+v.Height-3 {
+		v.LineStart = max(0, min(v.LineCursor-v.Height+3, v.NumVisible-v.Height))
+	}
+	if v.Height > v.NumVisible-v.LineStart {
+		v.LineStart = v.NumVisible - v.Height
+	}
+	if v.LineCursor > v.NumVisible-1 {
+		v.LineCursor = 0
+	}
+}
+
+func (v *Variables) ResetCursor(viewHeight int) {
+	v.LineCursor = 0
+	v.AlignCursor()
+}
+
+func (v *Variables) Expand() {
+	if v.Expanded == nil {
+		v.Expanded = map[string]bool{}
+	}
+	expandVariable(v.Variables, v.LineCursor, v.Expanded)
+	v.NumVisible = visibleVariables(v.Variables, v.Expanded)
+}
+
+func (v *Variables) Collapse(viewHeight int) {
+	collapseVariable(v.Variables, &v.LineCursor, v.Expanded)
+	v.NumVisible = visibleVariables(v.Variables, v.Expanded)
+	v.AlignCursor()
+}
+
+func (v *Variables) Render(active bool) ([]string, []int) {
+	return renderVariables2(
+		v.Variables,
+		v.Expanded,
+		v.Width,
+		v.Height,
+		v.LineStart,
+		v.LineCursor,
+		active,
+	)
+}
+
+type variable struct {
 	Name     string
 	Value    string
 	Type     string
@@ -134,12 +213,12 @@ func fillValues(vars []api.Variable) []api.Variable {
 	return vars
 }
 
-func flattenVariables(vars []api.Variable) []variable2 {
-	var flat []variable2
+func flattenVariables(vars []api.Variable) []variable {
+	var flat []variable
 
 	var flatten func(v api.Variable, path []string, depth int)
 	flatten = func(v api.Variable, path []string, depth int) {
-		flat = append(flat, variable2{
+		flat = append(flat, variable{
 			Name:     v.Name,
 			Type:     v.Type,
 			Value:    v.Value,
@@ -162,7 +241,7 @@ func flattenVariables(vars []api.Variable) []variable2 {
 	return flat
 }
 
-func visibleVariables(vars []variable2, exp map[string]bool) int {
+func visibleVariables(vars []variable, exp map[string]bool) int {
 	var sum int
 	for _, v := range vars {
 		if isVariableVisible(v, exp) {
@@ -176,7 +255,7 @@ func pathKey(path []string) string {
 	return strings.Join(path, ".")
 }
 
-func isVariableVisible(v variable2, exp map[string]bool) bool {
+func isVariableVisible(v variable, exp map[string]bool) bool {
 	if v.Depth == 0 {
 		return true
 	}
@@ -191,7 +270,7 @@ func isVariableVisible(v variable2, exp map[string]bool) bool {
 	return true
 }
 
-func expandVariable(vars []variable2, cursor int, exp map[string]bool) {
+func expandVariable(vars []variable, cursor int, exp map[string]bool) {
 	count := 0
 	for _, v := range vars {
 		if !isVariableVisible(v, exp) {
@@ -208,7 +287,7 @@ func expandVariable(vars []variable2, cursor int, exp map[string]bool) {
 	}
 }
 
-func collapseVariable(vars []variable2, cursor *int, exp map[string]bool) {
+func collapseVariable(vars []variable, cursor *int, exp map[string]bool) {
 	count := 0
 	for _, v := range vars {
 		if !isVariableVisible(v, exp) {
@@ -244,7 +323,7 @@ func collapseVariable(vars []variable2, cursor *int, exp map[string]bool) {
 	}
 }
 
-func renderVariables2(vars []variable2, exp map[string]bool, width, height, linestart, cursor int, active bool) ([]string, []int) {
+func renderVariables2(vars []variable, exp map[string]bool, width, height, linestart, cursor int, active bool) ([]string, []int) {
 	var buf strings.Builder
 	var linenum int
 	var lines []string

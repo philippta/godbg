@@ -1,8 +1,115 @@
 package ui
 
 import (
+	"bytes"
+	"os"
 	"strings"
+
+	"github.com/go-delve/delve/service/api"
+	"github.com/philippta/godbg/dlv"
 )
+
+type Source struct {
+	Width       int
+	Height      int
+	File        string
+	Lines       [][]byte
+	LineStart   int
+	LineCursor  int
+	PCCursor    int
+	Breakpoints []*api.Breakpoint
+}
+
+func (s *Source) Resize(w, h int) {
+	s.Width, s.Height = w, h
+}
+
+func (s *Source) Render(active bool) ([]string, []int) {
+	breakpoints := fileBreakpoints(s.Breakpoints, s.File)
+	return sourceRender(
+		s.Lines,
+		s.Width,
+		s.Height,
+		s.LineStart,
+		s.PCCursor,
+		s.LineCursor,
+		breakpoints,
+		active,
+	)
+}
+
+func (s *Source) MoveUp(viewHeight int) {
+	s.LineCursor = max(0, s.LineCursor-1)
+	s.AlignCursor(viewHeight)
+}
+
+func (s *Source) MoveDown(viewHeight int) {
+	s.LineCursor = min(s.LineCursor+1, len(s.Lines)-1)
+	s.AlignCursor(viewHeight)
+}
+
+func (s *Source) AlignCursor(viewHeight int) {
+	if s.LineCursor < s.LineStart+2 {
+		s.LineStart = max(0, s.LineCursor-2)
+	}
+	if s.LineCursor > s.LineStart+viewHeight-3 {
+		s.LineStart = max(0, min(s.LineCursor-viewHeight+3, len(s.Lines)-viewHeight))
+	}
+}
+
+func (s *Source) CenterCursor(viewHeight int) {
+	s.LineStart = max(0, min(s.LineCursor-viewHeight/2, len(s.Lines)-viewHeight))
+}
+
+func (s *Source) InitBreakpoints(dbg *dlv.Debugger) {
+	s.Breakpoints = dbg.Breakpoints()
+}
+
+func (s *Source) ToggleBreakpoint(dbg *dlv.Debugger) {
+	var activeBP *api.Breakpoint
+	for _, bp := range s.Breakpoints {
+		if bp.File == s.File && bp.Line == s.LineCursor+1 {
+			activeBP = bp
+			break
+		}
+	}
+
+	if activeBP == nil {
+		dbg.CreateFileBreakpoint(s.File, s.LineCursor+1)
+	} else {
+		dbg.ClearBreakpoint(activeBP.ID)
+	}
+
+	s.Breakpoints = dbg.Breakpoints()
+}
+
+func (s *Source) LoadLocation(dbg *dlv.Debugger, viewHeight int) (changed bool) {
+	path, line := dbg.Location()
+	if path == "" {
+		return
+	}
+
+	changed = s.File != path
+	s.PCCursor = line - 1
+	s.LineCursor = line - 1
+
+	if s.File != path {
+		src, err := os.ReadFile(path)
+		must(err)
+
+		src = bytes.ReplaceAll(src, []byte{'\t'}, []byte("    "))
+		if src[len(src)-1] == '\n' {
+			src = src[:len(src)-1]
+		}
+
+		s.Lines = bytes.Split(src, []byte{'\n'})
+		s.File = path
+		s.CenterCursor(viewHeight)
+	} else {
+		s.AlignCursor(viewHeight)
+	}
+	return changed
+}
 
 func sourceRender(lines [][]byte, width, height, lineStart, pcCursor, lineCursor int, breakpoints []int, active bool) ([]string, []int) {
 	if len(lines) == 0 {
@@ -110,4 +217,14 @@ func contains(nn []int, n int) bool {
 		}
 	}
 	return false
+}
+
+func fileBreakpoints(bps []*api.Breakpoint, file string) []int {
+	var lineNums []int
+	for _, bp := range bps {
+		if bp.File == file {
+			lineNums = append(lineNums, bp.Line-1)
+		}
+	}
+	return lineNums
 }
