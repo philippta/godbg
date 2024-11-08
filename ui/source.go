@@ -7,58 +7,58 @@ import (
 
 	"github.com/go-delve/delve/service/api"
 	"github.com/philippta/godbg/dlv"
+	"github.com/philippta/godbg/frame"
 )
 
+type Size struct {
+	Width  int
+	Height int
+}
+
+type Cursors struct {
+	PC   int
+	Line int
+}
+
+type File struct {
+	Name       string
+	Lines      [][]byte
+	LineOffset int
+}
+
 type Source struct {
-	Width       int
-	Height      int
-	File        string
-	Lines       [][]byte
-	LineStart   int
-	LineCursor  int
-	PCCursor    int
+	Focused     bool
+	Size        Size
+	File        File
+	Cursors     Cursors
 	Breakpoints []*api.Breakpoint
 }
 
 func (s *Source) Resize(w, h int) {
-	s.Width, s.Height = w, h
+	s.Size.Width, s.Size.Height = w, h
 }
 
-func (s *Source) Render(active bool) ([]string, []int) {
-	breakpoints := fileBreakpoints(s.Breakpoints, s.File)
-	return sourceRender(
-		s.Lines,
-		s.Width,
-		s.Height,
-		s.LineStart,
-		s.PCCursor,
-		s.LineCursor,
-		breakpoints,
-		active,
-	)
+func (s *Source) MoveUp() {
+	s.Cursors.Line = max(0, s.Cursors.Line-1)
+	s.AlignCursor()
 }
 
-func (s *Source) MoveUp(viewHeight int) {
-	s.LineCursor = max(0, s.LineCursor-1)
-	s.AlignCursor(viewHeight)
+func (s *Source) MoveDown() {
+	s.Cursors.Line = min(s.Cursors.Line+1, len(s.File.Lines)-1)
+	s.AlignCursor()
 }
 
-func (s *Source) MoveDown(viewHeight int) {
-	s.LineCursor = min(s.LineCursor+1, len(s.Lines)-1)
-	s.AlignCursor(viewHeight)
-}
-
-func (s *Source) AlignCursor(viewHeight int) {
-	if s.LineCursor < s.LineStart+2 {
-		s.LineStart = max(0, s.LineCursor-2)
+func (s *Source) AlignCursor() {
+	if s.Cursors.Line < s.File.LineOffset+2 {
+		s.File.LineOffset = max(0, s.Cursors.Line-2)
 	}
-	if s.LineCursor > s.LineStart+viewHeight-3 {
-		s.LineStart = max(0, min(s.LineCursor-viewHeight+3, len(s.Lines)-viewHeight))
+	if s.Cursors.Line > s.File.LineOffset+s.Size.Height-3 {
+		s.File.LineOffset = max(0, min(s.Cursors.Line-s.Size.Height+3, len(s.File.Lines)-s.Size.Height))
 	}
 }
 
-func (s *Source) CenterCursor(viewHeight int) {
-	s.LineStart = max(0, min(s.LineCursor-viewHeight/2, len(s.Lines)-viewHeight))
+func (s *Source) CenterCursor() {
+	s.File.LineOffset = max(0, min(s.Cursors.Line-s.Size.Height/2, len(s.File.Lines)-s.Size.Height))
 }
 
 func (s *Source) InitBreakpoints(dbg *dlv.Debugger) {
@@ -68,14 +68,14 @@ func (s *Source) InitBreakpoints(dbg *dlv.Debugger) {
 func (s *Source) ToggleBreakpoint(dbg *dlv.Debugger) {
 	var activeBP *api.Breakpoint
 	for _, bp := range s.Breakpoints {
-		if bp.File == s.File && bp.Line == s.LineCursor+1 {
+		if bp.File == s.File.Name && bp.Line == s.Cursors.Line+1 {
 			activeBP = bp
 			break
 		}
 	}
 
 	if activeBP == nil {
-		dbg.CreateFileBreakpoint(s.File, s.LineCursor+1)
+		dbg.CreateFileBreakpoint(s.File.Name, s.Cursors.Line+1)
 	} else {
 		dbg.ClearBreakpoint(activeBP.ID)
 	}
@@ -83,18 +83,16 @@ func (s *Source) ToggleBreakpoint(dbg *dlv.Debugger) {
 	s.Breakpoints = dbg.Breakpoints()
 }
 
-func (s *Source) LoadLocation(dbg *dlv.Debugger, viewHeight int) (changed bool) {
-	path, line := dbg.Location()
-	if path == "" {
+func (s *Source) LoadLocation(file string, line int) {
+	if file == "" {
 		return
 	}
 
-	changed = s.File != path
-	s.PCCursor = line - 1
-	s.LineCursor = line - 1
+	s.Cursors.PC = line - 1
+	s.Cursors.Line = line - 1
 
-	if s.File != path {
-		src, err := os.ReadFile(path)
+	if s.File.Name != file {
+		src, err := os.ReadFile(file)
 		must(err)
 
 		src = bytes.ReplaceAll(src, []byte{'\t'}, []byte("    "))
@@ -102,28 +100,28 @@ func (s *Source) LoadLocation(dbg *dlv.Debugger, viewHeight int) (changed bool) 
 			src = src[:len(src)-1]
 		}
 
-		s.Lines = bytes.Split(src, []byte{'\n'})
-		s.File = path
-		s.CenterCursor(viewHeight)
+		s.File.Lines = bytes.Split(src, []byte{'\n'})
+		s.File.Name = file
+		s.CenterCursor()
 	} else {
-		s.AlignCursor(viewHeight)
+		s.AlignCursor()
 	}
-	return changed
 }
 
-func sourceRender(lines [][]byte, width, height, lineStart, pcCursor, lineCursor int, breakpoints []int, active bool) ([]string, []int) {
-	if len(lines) == 0 {
+func (s *Source) Render() ([]string, []int) {
+	if len(s.File.Lines) == 0 {
 		return []string{}, []int{}
 	}
 
 	const iotaBufCap = 5
 
 	var (
+		breakpoints  = fileBreakpoints(s.Breakpoints, s.File.Name)
 		iotaBuf      = [iotaBufCap]byte{}
 		padBuf       = [iotaBufCap]byte{}
-		lineNumWidth = numDigits(len(lines))
-		lineEnd      = min(lineStart+height, len(lines))
-		lens         = make([]int, 0, height)
+		lineNumWidth = numDigits(len(s.File.Lines))
+		lineEnd      = min(s.File.LineOffset+s.Size.Height, len(s.File.Lines))
+		lens         = make([]int, 0, s.Size.Height)
 	)
 
 	for i := 0; i < iotaBufCap; i++ {
@@ -131,21 +129,21 @@ func sourceRender(lines [][]byte, width, height, lineStart, pcCursor, lineCursor
 	}
 
 	var buf strings.Builder
-	buf.Grow(width*height + 1000)
+	buf.Grow(s.Size.Width*s.Size.Height + 1000)
 
-	for i := lineStart; i < lineEnd; i++ {
+	for i := s.File.LineOffset; i < lineEnd; i++ {
 		// line len: 5
-		if i == pcCursor {
-			if active {
-				buf.WriteString("\033[93m=> ")
+		if i == s.Cursors.Line {
+			if s.Focused {
+				buf.WriteString("\033[38;92m=> ")
 			} else {
-				buf.WriteString("\033[90m=> ")
+				buf.WriteString("\033[38;90m=> ")
 			}
-		} else if i == lineCursor {
-			if active {
-				buf.WriteString("\033[32m=> ")
+		} else if i == s.Cursors.PC {
+			if s.Focused {
+				buf.WriteString("\033[38;93m=> ")
 			} else {
-				buf.WriteString("\033[90m=> ")
+				buf.WriteString("\033[38;90m=> ")
 			}
 		} else {
 			buf.WriteString("\033[0m   ")
@@ -153,7 +151,7 @@ func sourceRender(lines [][]byte, width, height, lineStart, pcCursor, lineCursor
 
 		// line len: 2
 		if contains(breakpoints, i) {
-			buf.WriteString("\033[91m* ")
+			buf.WriteString("\033[38;91m* ")
 		} else {
 			buf.WriteString("  ")
 		}
@@ -161,19 +159,19 @@ func sourceRender(lines [][]byte, width, height, lineStart, pcCursor, lineCursor
 		paddedItoa(iotaBuf[:], i+1)
 
 		// line len: lineNumWidth
-		buf.WriteString("\033[34m")
+		buf.WriteString("\033[38;94m")
 		buf.Write(iotaBuf[iotaBufCap-lineNumWidth:])
 		buf.WriteString(": ")
 
-		ll := len(lines[i])
+		ll := len(s.File.Lines[i])
 
 		// line len: endc
-		if i == lineCursor && active {
+		if i == s.Cursors.Line && s.Focused {
 			buf.WriteString("\033[97m")
 		} else {
 			buf.WriteString("\033[37m")
 		}
-		buf.Write(lines[i])
+		buf.Write(s.File.Lines[i])
 
 		// line len: 1 (ignored)
 		if i < lineEnd-1 {
@@ -184,6 +182,67 @@ func sourceRender(lines [][]byte, width, height, lineStart, pcCursor, lineCursor
 	}
 
 	return strings.Split(buf.String(), "\n"), lens
+}
+
+func (s *Source) RenderFrame() (*frame.Frame, *frame.Frame) {
+	text := frame.New(s.Size.Height, s.Size.Width)
+	text.FillSpace()
+
+	colors := frame.New(s.Size.Height, s.Size.Width)
+
+	if len(s.File.Lines) == 0 {
+		return text, colors
+	}
+
+	const iotaBufCap = 5
+	var (
+		breakpoints  = fileBreakpoints(s.Breakpoints, s.File.Name)
+		iotaBuf      = [iotaBufCap]byte{' ', ' ', ' ', ' ', ' '}
+		lineNumWidth = numDigits(len(s.File.Lines))
+		lineEnd      = min(s.File.LineOffset+s.Size.Height, len(s.File.Lines))
+	)
+
+	for i := s.File.LineOffset; i < lineEnd; i++ {
+		y := i - s.File.LineOffset
+		x := 0
+
+		if i == s.Cursors.Line || i == s.Cursors.PC {
+			x = text.WriteString(y, x, "=> ")
+		} else {
+			x = text.WriteString(y, x, "   ")
+		}
+
+		if contains(breakpoints, i) {
+			x = text.WriteString(y, x, "* ")
+		} else {
+			x = text.WriteString(y, x, "  ")
+		}
+
+		paddedItoa(iotaBuf[:], i+1)
+		x = text.WriteBytes(y, x, iotaBuf[iotaBufCap-lineNumWidth:])
+		x = text.WriteString(y, x, ": ")
+		x = text.WriteBytes(y, x, s.File.Lines[i])
+	}
+
+	for i := s.File.LineOffset; i < lineEnd; i++ {
+		y := i - s.File.LineOffset
+
+		if i == s.Cursors.Line {
+			colors.SetColor(y, 0, 3, frame.ColorFGGreen)
+		} else if i == s.Cursors.PC {
+			colors.SetColor(y, 0, 3, frame.ColorFGYellow)
+		} else {
+			colors.SetColor(y, 0, 3, frame.ColorReset)
+		}
+
+		if contains(breakpoints, i) {
+			colors.SetColor(y, 3, 1, frame.ColorFGRed)
+		}
+
+		colors.SetColor(y, 5, lineNumWidth+1, frame.ColorFGBlue)
+	}
+
+	return text, colors
 }
 
 func numDigits(i int) int {

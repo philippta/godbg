@@ -6,10 +6,10 @@ import (
 	"strings"
 
 	"github.com/go-delve/delve/service/api"
-	"github.com/philippta/godbg/dlv"
 )
 
 type Variables struct {
+	Focused    bool
 	Width      int
 	Height     int
 	Variables  []variable
@@ -23,9 +23,7 @@ func (v *Variables) Resize(w, h int) {
 	v.Width, v.Height = w, h
 }
 
-func (v *Variables) Load(dbg *dlv.Debugger, viewHeight int) {
-	vars, err := dbg.Variables()
-	must(err)
+func (v *Variables) Load(vars []api.Variable) {
 	v.Variables = flattenVariables(fillValues(vars))
 	v.NumVisible = visibleVariables(v.Variables, v.Expanded)
 	v.AlignCursor()
@@ -69,13 +67,13 @@ func (v *Variables) Expand() {
 	v.NumVisible = visibleVariables(v.Variables, v.Expanded)
 }
 
-func (v *Variables) Collapse(viewHeight int) {
+func (v *Variables) Collapse() {
 	collapseVariable(v.Variables, &v.LineCursor, v.Expanded)
 	v.NumVisible = visibleVariables(v.Variables, v.Expanded)
 	v.AlignCursor()
 }
 
-func (v *Variables) Render(active bool) ([]string, []int) {
+func (v *Variables) Render() ([]string, []int) {
 	return renderVariables2(
 		v.Variables,
 		v.Expanded,
@@ -83,7 +81,7 @@ func (v *Variables) Render(active bool) ([]string, []int) {
 		v.Height,
 		v.LineStart,
 		v.LineCursor,
-		active,
+		v.Focused,
 	)
 }
 

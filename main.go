@@ -12,7 +12,6 @@ import (
 const usage = "Usage: godbg <debug|test|exec> [path] [func regex]"
 
 func main() {
-
 	debug.Truncate()
 	args := os.Args[1:]
 

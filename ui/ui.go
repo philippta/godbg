@@ -8,7 +8,14 @@ import (
 
 	"github.com/mattn/go-tty"
 	"github.com/philippta/godbg/dlv"
+	"github.com/philippta/godbg/frame"
 	"github.com/philippta/godbg/term"
+)
+
+const (
+	PaneSource = iota
+	PaneVariables
+	PaneCount
 )
 
 func Run(dbg *dlv.Debugger) {
@@ -22,13 +29,23 @@ func Run(dbg *dlv.Debugger) {
 	defer cancel()
 
 	v := &View{
-		dbg:        dbg,
-		tty:        tty,
-		paneNum:    2,
-		paneActive: 0,
-		repaint:    make(chan struct{}),
+		dbg:   dbg,
+		tty:   tty,
+		focus: PaneSource,
 	}
-	v.Init()
+
+	out := v.tty.Output()
+	out.Write(term.AltScreen)
+	out.Write(term.HideCursor)
+
+	w, h, _ := v.tty.Size()
+	v.Resize(w, h)
+	go v.ResizeLoop()
+
+	v.source.InitBreakpoints(v.dbg)
+	v.Update()
+	v.Paint()
+
 	defer v.Close()
 
 	go func() {
@@ -40,70 +57,17 @@ func Run(dbg *dlv.Debugger) {
 }
 
 type View struct {
-	tty     *tty.TTY
-	repaint chan struct{}
+	tty *tty.TTY
 
-	width      int
-	height     int
-	paneActive int
-	paneNum    int
+	width    int
+	height   int
+	focus    int
+	prevFile string
 
-	sourceView    Source
-	variablesView Variables
+	source    Source
+	variables Variables
 
 	dbg *dlv.Debugger
-}
-
-func (v *View) Init() {
-	out := v.tty.Output()
-	out.Write(term.AltScreen)
-	out.Write(term.HideCursor)
-
-	w, h, _ := v.tty.Size()
-	v.Resize(w, h)
-
-	go v.ResizeLoop()
-	go v.RepaintLoop()
-
-	v.sourceView.InitBreakpoints(v.dbg)
-	v.sourceLoadFile()
-	v.variablesView.Load(v.dbg, v.height)
-
-	v.Repaint()
-}
-
-func (v *View) Close() {
-	out := v.tty.Output()
-	out.Write(term.ShowCursor)
-	out.Write(term.ExitAltScreen)
-	v.tty.Close()
-	close(v.repaint)
-}
-
-func (v *View) Resize(width, height int) {
-	v.width = width
-	v.height = height
-	v.sourceView.Resize(width/2, height)
-	v.variablesView.Resize(width/2-1, height)
-}
-
-func (v *View) ResizeLoop() {
-	for size := range v.tty.SIGWINCH() {
-		v.Resize(size.W, size.H)
-		v.repaint <- struct{}{}
-	}
-}
-
-func (v *View) Repaint() {
-	v.repaint <- struct{}{}
-}
-
-func (v *View) RepaintLoop() {
-	for range v.repaint {
-		out := v.tty.Output()
-		out.Write(term.ResetCursor)
-		out.WriteString(v.Render())
-	}
 }
 
 func (v *View) InputLoop() {
@@ -120,48 +84,49 @@ func (v *View) InputLoop() {
 		if err != nil {
 			panic(err)
 		}
+		for v.tty.Buffered() {
+			v.tty.ReadRune()
+		}
 
 		switch key {
 		case '\t':
-			v.paneActive = (v.paneActive + 1) % v.paneNum
+			v.focus = (v.focus + 1) % PaneCount
+			v.source.Focused = v.focus == PaneSource
+			v.variables.Focused = v.focus == PaneVariables
 		case 'q':
 			return
 		case 'k': // Move up
-			switch v.paneActive {
-			case 0:
-				v.sourceView.MoveUp(v.height)
-			case 1:
-				v.variablesView.MoveUp()
+			switch v.focus {
+			case PaneSource:
+				v.source.MoveUp()
+			case PaneVariables:
+				v.variables.MoveUp()
 			}
 		case 'j': // Move down
-			switch v.paneActive {
-			case 0:
-				v.sourceView.MoveDown(v.height)
-			case 1:
-				v.variablesView.MoveDown()
+			switch v.focus {
+			case PaneSource:
+				v.source.MoveDown()
+			case PaneVariables:
+				v.variables.MoveDown()
 			}
 		case 'l': // Expand
-			v.variablesView.Expand()
+			v.variables.Expand()
 		case 'h': // Collapse
-			v.variablesView.Collapse(v.height)
+			v.variables.Collapse()
 		case 's': // Step
 			v.dbg.Step()
-			v.sourceLoadFile()
-			v.variablesView.Load(v.dbg, v.height)
+			v.Update()
 		case 'i': // Step in
 			v.dbg.StepIn()
-			v.sourceLoadFile()
-			v.variablesView.Load(v.dbg, v.height)
+			v.Update()
 		case 'o': // Step out
 			v.dbg.StepOut()
-			v.sourceLoadFile()
-			v.variablesView.Load(v.dbg, v.height)
+			v.Update()
 		case 'c': // Continue
 			v.dbg.Continue()
-			v.sourceLoadFile()
-			v.variablesView.Load(v.dbg, v.height)
+			v.Update()
 		case 'b': // Breakpoint
-			v.sourceView.ToggleBreakpoint(v.dbg)
+			v.source.ToggleBreakpoint(v.dbg)
 			// case 'v':
 			// 	vars, err := v.dbg.Variables()
 			// 	must(err)
@@ -173,46 +138,72 @@ func (v *View) InputLoop() {
 			return
 		}
 
-		v.Repaint()
+		v.Paint()
 	}
 }
 
-func (v *View) Render() string {
-	// start := time.Now()
-	// defer func() {
-	// 	debug.Logf("Render time: %v", time.Since(start))
-	// }()
+func (v *View) Update() {
+	file, line := v.dbg.Location()
+	vars, _ := v.dbg.Variables()
 
-	source, sourceLens := v.sourceView.Render(v.paneActive == 0)
-	if len(source) == 0 {
-		return ""
+	v.source.LoadLocation(file, line)
+
+	v.variables.Load(vars)
+	if file != v.prevFile {
+		v.variables.ResetCursor(v.height)
 	}
 
-	variables, variablesLens := v.variablesView.Render(v.paneActive == 1)
-
-	return verticalSplit(
-		v.width, v.height,
-		block{source, sourceLens},
-		block{variables, variablesLens},
-	)
+	v.prevFile = file
 }
 
-func listenresize(v *View, tty *tty.TTY, repaint chan<- struct{}) {
-	for size := range tty.SIGWINCH() {
-		v.width = size.W
-		v.height = size.H
-		v.variablesView.Resize(size.W, size.H)
-		repaint <- struct{}{}
+func (v *View) Paint() {
+	text := frame.New(v.height, v.width)
+	text.FillSpace()
+
+	colors := frame.New(v.height, v.width)
+
+	sourceText, sourceColors := v.source.RenderFrame()
+	text.CopyFrom(0, 0, sourceText)
+	colors.CopyFrom(0, 0, sourceColors)
+
+	out := v.tty.Output()
+	out.Write(term.ResetCursor)
+	text.PrintColored(out, colors)
+
+	// source, sourceLens := v.source.Render()
+	// if len(source) == 0 {
+	// 	return
+	// }
+	//
+	// variables, variablesLens := v.variables.Render()
+	//
+	// return verticalSplit(
+	// 	v.width, v.height,
+	// 	block{source, sourceLens},
+	// 	block{variables, variablesLens},
+	// )
+}
+
+func (v *View) Resize(width, height int) {
+	v.width = width
+	v.height = height
+	v.source.Resize(width/2, height)
+	v.variables.Resize(width/2-1, height)
+}
+
+func (v *View) ResizeLoop() {
+	for size := range v.tty.SIGWINCH() {
+		v.Resize(size.W, size.H)
+		v.Paint()
 	}
 }
 
-func (v *View) sourceLoadFile() {
-	changed := v.sourceView.LoadLocation(v.dbg, v.height)
-	if changed {
-		v.variablesView.ResetCursor(v.height)
-	}
+func (v *View) Close() {
+	out := v.tty.Output()
+	out.Write(term.ShowCursor)
+	out.Write(term.ExitAltScreen)
+	v.tty.Close()
 }
-
 func must(err error) {
 	if err != nil {
 		panic(err)
