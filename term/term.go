@@ -1,6 +1,7 @@
 package term
 
 import (
+	"fmt"
 	"os"
 	"strings"
 )
@@ -24,4 +25,8 @@ func Clear(w *os.File, width, height int) {
 		w.WriteString(line)
 	}
 	w.Write(ResetCursor)
+}
+
+func PositionCursor(y, x int) []byte {
+	return []byte(fmt.Sprintf("\033[%d;%dH", y, x))
 }
