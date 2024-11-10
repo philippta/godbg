@@ -9,6 +9,7 @@ import (
 	"github.com/mattn/go-tty"
 	"github.com/philippta/godbg/dlv"
 	"github.com/philippta/godbg/frame"
+	"github.com/philippta/godbg/perf"
 	"github.com/philippta/godbg/term"
 )
 
@@ -29,9 +30,10 @@ func Run(dbg *dlv.Debugger) {
 	defer cancel()
 
 	v := &View{
-		dbg:   dbg,
-		tty:   tty,
-		focus: PaneSource,
+		dbg:    dbg,
+		tty:    tty,
+		focus:  PaneSource,
+		source: Source{Focused: true},
 	}
 
 	out := v.tty.Output()
@@ -143,45 +145,55 @@ func (v *View) InputLoop() {
 }
 
 func (v *View) Update() {
+	p := perf.Start("Update")
+
 	file, line := v.dbg.Location()
+	p.Mark("Location")
 	vars, _ := v.dbg.Variables()
+	p.Mark("Variables")
 
 	v.source.LoadLocation(file, line)
+	p.Mark("LoadLoc")
 
 	v.variables.Load(vars)
+	p.Mark("LoadVar")
 	if file != v.prevFile {
 		v.variables.ResetCursor(v.height)
 	}
 
 	v.prevFile = file
+	p.End()
 }
 
 func (v *View) Paint() {
+	p := perf.Start("Paint")
 	text := frame.New(v.height, v.width)
 	text.FillSpace()
+	p.Mark("Text Frame")
 
 	colors := frame.New(v.height, v.width)
+	p.Mark("Color Frame")
+
+	for i := 0; i < v.height; i++ {
+		colors.SetColor(i, v.width/2, 1, frame.ColorReset)
+		text.WriteAt(i, v.width/2, '|')
+	}
 
 	sourceText, sourceColors := v.source.RenderFrame()
 	text.CopyFrom(0, 0, sourceText)
 	colors.CopyFrom(0, 0, sourceColors)
+	p.Mark("Render Source")
+
+	varsText, varsColors := v.variables.RenderFrame()
+	text.CopyFrom(0, v.width/2+1, varsText)
+	colors.CopyFrom(0, v.width/2+1, varsColors)
+	p.Mark("Render Variables")
 
 	out := v.tty.Output()
 	out.Write(term.ResetCursor)
 	text.PrintColored(out, colors)
-
-	// source, sourceLens := v.source.Render()
-	// if len(source) == 0 {
-	// 	return
-	// }
-	//
-	// variables, variablesLens := v.variables.Render()
-	//
-	// return verticalSplit(
-	// 	v.width, v.height,
-	// 	block{source, sourceLens},
-	// 	block{variables, variablesLens},
-	// )
+	p.Mark("Print Output")
+	p.End()
 }
 
 func (v *View) Resize(width, height int) {

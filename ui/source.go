@@ -3,7 +3,6 @@ package ui
 import (
 	"bytes"
 	"os"
-	"strings"
 
 	"github.com/go-delve/delve/service/api"
 	"github.com/philippta/godbg/dlv"
@@ -108,82 +107,6 @@ func (s *Source) LoadLocation(file string, line int) {
 	}
 }
 
-func (s *Source) Render() ([]string, []int) {
-	if len(s.File.Lines) == 0 {
-		return []string{}, []int{}
-	}
-
-	const iotaBufCap = 5
-
-	var (
-		breakpoints  = fileBreakpoints(s.Breakpoints, s.File.Name)
-		iotaBuf      = [iotaBufCap]byte{}
-		padBuf       = [iotaBufCap]byte{}
-		lineNumWidth = numDigits(len(s.File.Lines))
-		lineEnd      = min(s.File.LineOffset+s.Size.Height, len(s.File.Lines))
-		lens         = make([]int, 0, s.Size.Height)
-	)
-
-	for i := 0; i < iotaBufCap; i++ {
-		padBuf[i] = ' '
-	}
-
-	var buf strings.Builder
-	buf.Grow(s.Size.Width*s.Size.Height + 1000)
-
-	for i := s.File.LineOffset; i < lineEnd; i++ {
-		// line len: 5
-		if i == s.Cursors.Line {
-			if s.Focused {
-				buf.WriteString("\033[38;92m=> ")
-			} else {
-				buf.WriteString("\033[38;90m=> ")
-			}
-		} else if i == s.Cursors.PC {
-			if s.Focused {
-				buf.WriteString("\033[38;93m=> ")
-			} else {
-				buf.WriteString("\033[38;90m=> ")
-			}
-		} else {
-			buf.WriteString("\033[0m   ")
-		}
-
-		// line len: 2
-		if contains(breakpoints, i) {
-			buf.WriteString("\033[38;91m* ")
-		} else {
-			buf.WriteString("  ")
-		}
-
-		paddedItoa(iotaBuf[:], i+1)
-
-		// line len: lineNumWidth
-		buf.WriteString("\033[38;94m")
-		buf.Write(iotaBuf[iotaBufCap-lineNumWidth:])
-		buf.WriteString(": ")
-
-		ll := len(s.File.Lines[i])
-
-		// line len: endc
-		if i == s.Cursors.Line && s.Focused {
-			buf.WriteString("\033[97m")
-		} else {
-			buf.WriteString("\033[37m")
-		}
-		buf.Write(s.File.Lines[i])
-
-		// line len: 1 (ignored)
-		if i < lineEnd-1 {
-			buf.WriteByte('\n')
-		}
-
-		lens = append(lens, 5+2+ll+lineNumWidth)
-	}
-
-	return strings.Split(buf.String(), "\n"), lens
-}
-
 func (s *Source) RenderFrame() (*frame.Frame, *frame.Frame) {
 	text := frame.New(s.Size.Height, s.Size.Width)
 	text.FillSpace()
@@ -227,7 +150,9 @@ func (s *Source) RenderFrame() (*frame.Frame, *frame.Frame) {
 	for i := s.File.LineOffset; i < lineEnd; i++ {
 		y := i - s.File.LineOffset
 
-		if i == s.Cursors.Line {
+		if !s.Focused {
+			colors.SetColor(y, 0, 3, frame.ColorFGBlack)
+		} else if i == s.Cursors.Line {
 			colors.SetColor(y, 0, 3, frame.ColorFGGreen)
 		} else if i == s.Cursors.PC {
 			colors.SetColor(y, 0, 3, frame.ColorFGYellow)
@@ -240,6 +165,11 @@ func (s *Source) RenderFrame() (*frame.Frame, *frame.Frame) {
 		}
 
 		colors.SetColor(y, 5, lineNumWidth+1, frame.ColorFGBlue)
+
+		if i == s.Cursors.Line {
+			offset := lineNumWidth + 6
+			colors.SetColor(y, offset, s.Size.Width-offset, frame.ColorFGWhite)
+		}
 	}
 
 	return text, colors

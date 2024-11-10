@@ -3,8 +3,7 @@ package ui
 import (
 	_ "embed"
 	"encoding/json"
-	"fmt"
-	"strings"
+	"os"
 	"testing"
 
 	"github.com/go-delve/delve/service/api"
@@ -13,13 +12,13 @@ import (
 //go:embed testdata/vars.json
 var variablesJSON []byte
 
-func TestFlattenVariables2(t *testing.T) {
+func TestFlattenVariables(t *testing.T) {
 	var vv []api.Variable
 	if err := json.Unmarshal(variablesJSON, &vv); err != nil {
 		t.Fatal(err)
 	}
 
-	flat := flattenVariables(fillValues([]api.Variable{vv[17]}))
+	flat := flattenVariables(fillValues(vv))
 
 	exp := map[string]bool{}
 	linenum := 0
@@ -28,11 +27,15 @@ func TestFlattenVariables2(t *testing.T) {
 		exp[pathKey(f.Path)] = true
 	}
 
-	for i := 0; i < 139; i++ {
-		fmt.Print("+")
+	v := Variables{
+		Focused:    true,
+		Variables:  flat,
+		Expanded:   exp,
+		Size:       Size{Width: 90, Height: 30},
+		LineStart:  0,
+		LineCursor: linenum,
 	}
-	fmt.Println()
 
-	lines, _ := renderVariables2(flat, exp, 139, 0, 0, linenum, true)
-	fmt.Println(strings.Join(lines, "\n"))
+	text, colors := v.RenderFrame()
+	text.PrintLinesColored(os.Stdout, colors)
 }

@@ -6,13 +6,13 @@ import (
 	"strings"
 
 	"github.com/go-delve/delve/service/api"
+	"github.com/philippta/godbg/frame"
 )
 
 type Variables struct {
 	Focused    bool
-	Width      int
-	Height     int
-	Variables  []variable
+	Size       Size
+	Variables  []Variable
 	Expanded   map[string]bool
 	NumVisible int
 	LineCursor int
@@ -20,7 +20,7 @@ type Variables struct {
 }
 
 func (v *Variables) Resize(w, h int) {
-	v.Width, v.Height = w, h
+	v.Size.Width, v.Size.Height = w, h
 }
 
 func (v *Variables) Load(vars []api.Variable) {
@@ -43,11 +43,11 @@ func (v *Variables) AlignCursor() {
 	if v.LineCursor < v.LineStart+2 {
 		v.LineStart = max(0, v.LineCursor-2)
 	}
-	if v.LineCursor > v.LineStart+v.Height-3 {
-		v.LineStart = max(0, min(v.LineCursor-v.Height+3, v.NumVisible-v.Height))
+	if v.LineCursor > v.LineStart+v.Size.Height-3 {
+		v.LineStart = max(0, min(v.LineCursor-v.Size.Height+3, v.NumVisible-v.Size.Height))
 	}
-	if v.Height > v.NumVisible-v.LineStart {
-		v.LineStart = v.NumVisible - v.Height
+	if v.Size.Height > v.NumVisible-v.LineStart {
+		v.LineStart = max(0, v.NumVisible-v.Size.Height)
 	}
 	if v.LineCursor > v.NumVisible-1 {
 		v.LineCursor = 0
@@ -73,19 +73,62 @@ func (v *Variables) Collapse() {
 	v.AlignCursor()
 }
 
-func (v *Variables) Render() ([]string, []int) {
-	return renderVariables2(
-		v.Variables,
-		v.Expanded,
-		v.Width,
-		v.Height,
-		v.LineStart,
-		v.LineCursor,
-		v.Focused,
-	)
+func (v *Variables) RenderFrame() (*frame.Frame, *frame.Frame) {
+	text := frame.New(v.Size.Height, v.Size.Width)
+	text.FillSpace()
+
+	colors := frame.New(v.Size.Height, v.Size.Width)
+
+	var linenum int
+	for _, va := range v.Variables {
+		if !isVariableVisible(va, v.Expanded) {
+			continue
+		}
+		if linenum < v.LineStart {
+			linenum++
+			continue
+		}
+		if linenum-v.LineStart == v.Size.Height {
+			break
+		}
+
+		y := linenum - v.LineStart
+		x := 0
+
+		if v.Focused {
+			colors.SetColor(y, x, 3, frame.ColorFGGreen)
+		} else {
+			colors.SetColor(y, x, 3, frame.ColorFGBlack)
+		}
+		if linenum == v.LineCursor {
+			x = text.WriteString(y, x, "=> ")
+		} else {
+			x = text.WriteString(y, x, "   ")
+		}
+
+		x = x + va.Depth*2
+
+		colors.SetColor(y, x, len(va.Name), frame.ColorFGBlue)
+		x = text.WriteString(y, x, va.Name)
+
+		if linenum == v.LineCursor && v.Focused {
+			colors.SetColor(y, x, v.Size.Width-x, frame.ColorFGWhite)
+		}
+		x = text.WriteString(y, x, " = ")
+		x = text.WriteString(y, x, va.Value)
+
+		typePadSize := v.Size.Width - x - len(va.Type)
+		if typePadSize > 0 {
+			text.WriteString(y, v.Size.Width-len(va.Type), va.Type)
+		}
+
+		linenum++
+	}
+
+	return text, colors
 }
 
-type variable struct {
+type Variable struct {
 	Name     string
 	Value    string
 	Type     string
@@ -211,12 +254,12 @@ func fillValues(vars []api.Variable) []api.Variable {
 	return vars
 }
 
-func flattenVariables(vars []api.Variable) []variable {
-	var flat []variable
+func flattenVariables(vars []api.Variable) []Variable {
+	var flat []Variable
 
 	var flatten func(v api.Variable, path []string, depth int)
 	flatten = func(v api.Variable, path []string, depth int) {
-		flat = append(flat, variable{
+		flat = append(flat, Variable{
 			Name:     v.Name,
 			Type:     v.Type,
 			Value:    v.Value,
@@ -239,7 +282,7 @@ func flattenVariables(vars []api.Variable) []variable {
 	return flat
 }
 
-func visibleVariables(vars []variable, exp map[string]bool) int {
+func visibleVariables(vars []Variable, exp map[string]bool) int {
 	var sum int
 	for _, v := range vars {
 		if isVariableVisible(v, exp) {
@@ -253,7 +296,7 @@ func pathKey(path []string) string {
 	return strings.Join(path, ".")
 }
 
-func isVariableVisible(v variable, exp map[string]bool) bool {
+func isVariableVisible(v Variable, exp map[string]bool) bool {
 	if v.Depth == 0 {
 		return true
 	}
@@ -268,7 +311,7 @@ func isVariableVisible(v variable, exp map[string]bool) bool {
 	return true
 }
 
-func expandVariable(vars []variable, cursor int, exp map[string]bool) {
+func expandVariable(vars []Variable, cursor int, exp map[string]bool) {
 	count := 0
 	for _, v := range vars {
 		if !isVariableVisible(v, exp) {
@@ -285,7 +328,7 @@ func expandVariable(vars []variable, cursor int, exp map[string]bool) {
 	}
 }
 
-func collapseVariable(vars []variable, cursor *int, exp map[string]bool) {
+func collapseVariable(vars []Variable, cursor *int, exp map[string]bool) {
 	count := 0
 	for _, v := range vars {
 		if !isVariableVisible(v, exp) {
@@ -321,69 +364,9 @@ func collapseVariable(vars []variable, cursor *int, exp map[string]bool) {
 	}
 }
 
-func renderVariables2(vars []variable, exp map[string]bool, width, height, linestart, cursor int, active bool) ([]string, []int) {
-	var buf strings.Builder
-	var linenum int
-	var lines []string
-	var lens []int
-	var padding = strings.Repeat(" ", 500)
-
-	for _, v := range vars {
-		if !isVariableVisible(v, exp) {
-			continue
-		}
-		if linenum < linestart {
-			linenum++
-			continue
-		}
-
-		buf.Reset()
-		if linenum == cursor {
-			if active {
-				buf.WriteString("\033[32m=> ")
-			} else {
-				buf.WriteString("\033[90m=> ")
-			}
-		} else {
-			buf.WriteString("\033[37m   ")
-		}
-
-		buf.WriteString(padding[:v.Depth*2])
-		buf.WriteString("\033[34m")
-		buf.WriteString(v.Name)
-
-		if linenum == cursor && active {
-			buf.WriteString("\033[97m")
-		} else {
-			buf.WriteString("\033[37m")
-		}
-		buf.WriteString(" = ")
-		buf.WriteString(v.Value)
-
-		typePadSize := width - buf.Len() - len(v.Type) + 15
-		if typePadSize > 0 {
-			buf.WriteString(padding[:typePadSize])
-			buf.WriteString(v.Type)
-		}
-
-		linenum++
-
-		lines = append(lines, buf.String())
-		lens = append(lens, buf.Len()-15)
-	}
-
-	return lines, lens
-}
-
 func simpleType(t string) string {
 	if strings.HasSuffix(t, "interface {}") {
 		return strings.Replace(t, "interface {}", "any", 1)
 	}
-	// if strings.HasPrefix(t, "struct {") {
-	// 	return "struct"
-	// }
-	// if strings.HasPrefix(t, "func(") {
-	// 	return "func"
-	// }
 	return t
 }

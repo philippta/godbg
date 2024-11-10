@@ -20,8 +20,8 @@ func TestSourceRender(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer tty.Close()
 	w, _, _ := tty.Size()
+	tty.Close()
 
 	src := bytes.ReplaceAll(testfile, []byte{'\t'}, []byte("    "))
 	lines := bytes.Split(src, []byte{'\n'})
@@ -35,7 +35,7 @@ func TestSourceRender(t *testing.T) {
 	}
 
 	text, colors := source.RenderFrame()
-	text.PrintRawColored(os.Stdout, colors)
+	text.PrintColored(os.Stdout, colors)
 }
 
 func TestRuneCount(t *testing.T) {
@@ -59,7 +59,7 @@ func BenchmarkSourceRender(b *testing.B) {
 		Breakpoints: []*api.Breakpoint{{Line: 61}},
 	}
 	for n := 0; n < b.N; n++ {
-		source.Render()
+		source.RenderFrame()
 	}
 }
 

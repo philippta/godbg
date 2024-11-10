@@ -13,6 +13,7 @@ const (
 	ColorFGGreen
 	ColorFGYellow
 	ColorFGBlue
+	ColorFGWhite
 
 	ColorCount
 )
@@ -24,6 +25,7 @@ var Colors = [][]byte{
 	[]byte("\033[38;92m"), // FG Green
 	[]byte("\033[38;93m"), // FG Yellow
 	[]byte("\033[38;94m"), // FG Blue
+	[]byte("\033[38;97m"), // FG White
 }
 
 const numSpaces = 1024
@@ -45,24 +47,9 @@ type Frame struct {
 }
 
 func (f *Frame) FillSpace() {
-	cursor := 0
-
-	for cursor < len(f.Buf) {
+	for cursor := 0; cursor < len(f.Buf); cursor += len(spaces) {
 		copy(f.Buf[cursor:], spaces)
-		cursor += len(spaces)
 	}
-	//
-	// need := len(f.Buf)
-	// rows := need / numSpaces
-	//
-	// for i := 0; i < rows; i++ {
-	// 	copy(f.Buf[i*numSpaces:], spaces)
-	// }
-	//
-	// rest := need % numSpaces
-	// if rest > 0 {
-	// 	copy(f.Buf[rows:], spaces[:rest])
-	// }
 }
 
 func (f *Frame) Fill(b byte) {
@@ -75,7 +62,7 @@ func (f *Frame) Fill(b byte) {
 	}
 }
 
-func (f *Frame) CopyFrom(x, y int, src *Frame) {
+func (f *Frame) CopyFrom(y, x int, src *Frame) {
 	for i := 0; i < src.Rows; i++ {
 		srcRowStart := i * src.Cols
 		dstRowStart := (i+y)*f.Cols + x
@@ -83,7 +70,7 @@ func (f *Frame) CopyFrom(x, y int, src *Frame) {
 	}
 }
 
-func (f *Frame) WriteAt(x, y int, b byte) {
+func (f *Frame) WriteAt(y, x int, b byte) {
 	f.Buf[f.Cols*y+x] = b
 }
 
