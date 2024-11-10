@@ -142,9 +142,9 @@ func (s *Source) RenderFrame() (*frame.Frame, *frame.Frame) {
 		}
 
 		paddedItoa(iotaBuf[:], i+1)
-		x = text.WriteBytes(y, x, iotaBuf[iotaBufCap-lineNumWidth:])
-		x = text.WriteString(y, x, ": ")
-		x = text.WriteBytes(y, x, s.File.Lines[i])
+		x = text.WriteString(y, x, string(iotaBuf[iotaBufCap-lineNumWidth:]))
+		x = text.WriteString(y, x, "  ")
+		x = text.WriteString(y, x, string(s.File.Lines[i]))
 	}
 
 	for i := s.File.LineOffset; i < lineEnd; i++ {

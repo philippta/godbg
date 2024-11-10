@@ -82,14 +82,6 @@ func BenchmarkFillSpace(b *testing.B) {
 	}
 }
 
-func TestWriteSlice(t *testing.T) {
-	src := frame.New(3, 3)
-	src.WriteLine(0, []byte("AAA"))
-	src.WriteLine(1, []byte("BBB"))
-	src.WriteLine(2, []byte("CCC"))
-	src.Print(os.Stdout)
-}
-
 func TestCopyTo(t *testing.T) {
 	src := frame.New(17, 17)
 	src.Fill('A')

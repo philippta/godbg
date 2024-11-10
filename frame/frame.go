@@ -4,10 +4,11 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"strings"
 )
 
 const (
-	ColorReset byte = iota
+	ColorReset rune = iota
 	ColorFGBlack
 	ColorFGRed
 	ColorFGGreen
@@ -30,29 +31,29 @@ var Colors = [][]byte{
 
 const numSpaces = 1024
 
-var spaces = bytes.Repeat([]byte{' '}, numSpaces)
+var spaces = strings.Repeat(" ", numSpaces)
 
 func New(rows, cols int) *Frame {
 	return &Frame{
 		Rows: rows,
 		Cols: cols,
-		Buf:  make([]byte, rows*cols),
+		Buf:  make([]rune, rows*cols),
 	}
 }
 
 type Frame struct {
 	Rows int
 	Cols int
-	Buf  []byte
+	Buf  []rune
 }
 
 func (f *Frame) FillSpace() {
 	for cursor := 0; cursor < len(f.Buf); cursor += len(spaces) {
-		copy(f.Buf[cursor:], spaces)
+		copy(f.Buf[cursor:], []rune(spaces))
 	}
 }
 
-func (f *Frame) Fill(b byte) {
+func (f *Frame) Fill(b rune) {
 	if b == ' ' {
 		f.FillSpace()
 		return
@@ -70,25 +71,8 @@ func (f *Frame) CopyFrom(y, x int, src *Frame) {
 	}
 }
 
-func (f *Frame) WriteAt(y, x int, b byte) {
+func (f *Frame) WriteAt(y, x int, b rune) {
 	f.Buf[f.Cols*y+x] = b
-}
-
-func (f *Frame) WriteLine(y int, b []byte) {
-	off := f.Cols * y
-	end := off + min(f.Cols, len(b))
-	copy(f.Buf[off:end], b)
-}
-
-func (f *Frame) WriteBytes(y, x int, b []byte) int {
-	if x > f.Cols-1 {
-		return x
-	}
-	offset := f.Cols*y + x
-	length := min(f.Cols-x, len(b))
-	end := offset + length
-	copy(f.Buf[offset:end], b)
-	return length + x
 }
 
 func (f *Frame) WriteString(y, x int, s string) int {
@@ -98,11 +82,11 @@ func (f *Frame) WriteString(y, x int, s string) int {
 	offset := f.Cols*y + x
 	length := min(f.Cols-x, len(s))
 	end := offset + length
-	copy(f.Buf[offset:end], s)
+	copy(f.Buf[offset:end], []rune(s))
 	return length + x
 }
 
-func (f *Frame) SetColor(y, x, width int, color byte) {
+func (f *Frame) SetColor(y, x, width int, color rune) {
 	for w := range width {
 		f.Buf[f.Cols*y+x+w] = color
 	}
@@ -110,7 +94,7 @@ func (f *Frame) SetColor(y, x, width int, color byte) {
 
 func (f *Frame) Print(out *os.File) {
 	for i := 0; i < f.Rows; i++ {
-		out.Write(f.Buf[i*f.Cols : i*f.Cols+f.Cols])
+		out.WriteString(string(f.Buf[i*f.Cols : i*f.Cols+f.Cols]))
 		out.Write([]byte{'\n'})
 	}
 }
@@ -119,14 +103,14 @@ func (f *Frame) PrintColored(out *os.File, colors *Frame) {
 	var buf bytes.Buffer
 	buf.Grow(f.Rows * f.Cols * 2)
 
-	lastColor := byte(ColorCount)
+	lastColor := rune(ColorCount)
 	for i := range f.Buf {
 		if lastColor != colors.Buf[i] {
 			color := colors.Buf[i]
 			buf.Write(Colors[color])
 			lastColor = color
 		}
-		buf.WriteByte(f.Buf[i])
+		buf.WriteRune(f.Buf[i])
 	}
 
 	os.Stdout.Write(buf.Bytes())
@@ -134,12 +118,12 @@ func (f *Frame) PrintColored(out *os.File, colors *Frame) {
 
 func (f *Frame) PrintDebug(out *os.File) {
 	for i := 0; i < f.Rows; i++ {
-		out.Write([]byte(fmt.Sprintf("%x\n", f.Buf[i*f.Cols:i*f.Cols+f.Cols])))
+		out.WriteString(fmt.Sprintf("%x\n", f.Buf[i*f.Cols:i*f.Cols+f.Cols]))
 	}
 }
 
 func (f *Frame) PrintLinesColored(out *os.File, colors *Frame) {
-	lastColor := byte(ColorCount)
+	lastColor := rune(ColorCount)
 	for y := range f.Rows {
 		for x := range f.Cols {
 			if lastColor != colors.Buf[f.Cols*y+x] {
@@ -147,7 +131,7 @@ func (f *Frame) PrintLinesColored(out *os.File, colors *Frame) {
 				os.Stdout.Write(Colors[color])
 				lastColor = color
 			}
-			os.Stdout.Write([]byte{f.Buf[f.Cols*y+x]})
+			os.Stdout.WriteString(string(f.Buf[f.Cols*y+x]))
 		}
 		os.Stdout.Write([]byte{'\n'})
 	}

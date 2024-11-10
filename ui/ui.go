@@ -175,8 +175,8 @@ func (v *View) Paint() {
 	p.Mark("Color Frame")
 
 	for i := 0; i < v.height; i++ {
-		colors.SetColor(i, v.width/2, 1, frame.ColorReset)
-		text.WriteAt(i, v.width/2, '|')
+		colors.SetColor(i, v.width/2, 1, frame.ColorFGBlack)
+		text.WriteAt(i, v.width/2, '│')
 	}
 
 	sourceText, sourceColors := v.source.RenderFrame()
