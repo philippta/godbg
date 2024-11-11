@@ -73,12 +73,7 @@ func (v *Variables) Collapse() {
 	v.AlignCursor()
 }
 
-func (v *Variables) RenderFrame() (*frame.Frame, *frame.Frame) {
-	text := frame.New(v.Size.Height, v.Size.Width)
-	text.FillSpace()
-
-	colors := frame.New(v.Size.Height, v.Size.Width)
-
+func (v *Variables) RenderFrame(text, colors *frame.Frame, offsetY, offsetX int) {
 	var linenum int
 	for _, va := range v.Variables {
 		if !isVariableVisible(va, v.Expanded) {
@@ -92,8 +87,8 @@ func (v *Variables) RenderFrame() (*frame.Frame, *frame.Frame) {
 			break
 		}
 
-		y := linenum - v.LineStart
-		x := 0
+		y := linenum - v.LineStart + offsetY
+		x := offsetX
 
 		if v.Focused {
 			colors.SetColor(y, x, 3, frame.ColorFGGreen)
@@ -124,8 +119,6 @@ func (v *Variables) RenderFrame() (*frame.Frame, *frame.Frame) {
 
 		linenum++
 	}
-
-	return text, colors
 }
 
 type Variable struct {

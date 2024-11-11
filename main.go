@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/philippta/godbg/debug"
 	"github.com/philippta/godbg/dlv"
@@ -33,7 +34,8 @@ func main() {
 		}
 		defer dbg.Close()
 
-		ui.Run(dbg)
+		path, _ = filepath.Abs(filepath.Dir(path))
+		ui.Run(dbg, path)
 	case "test":
 		var path string
 		if len(args) > 1 {
@@ -50,7 +52,8 @@ func main() {
 		}
 		defer dbg.Close()
 
-		ui.Run(dbg)
+		path, _ = filepath.Abs(filepath.Dir(path))
+		ui.Run(dbg, path)
 	case "exec":
 		if len(args) < 2 {
 			fmt.Fprintln(os.Stderr, usage)
@@ -63,7 +66,8 @@ func main() {
 		}
 		defer dbg.Close()
 
-		ui.Run(dbg)
+		path, _ = filepath.Abs(filepath.Dir(path))
+		ui.Run(dbg, path)
 	}
 
 	fmt.Fprintln(os.Stderr, "Usage: godbg <debug|test> [path] [func regex]")

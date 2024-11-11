@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/go-delve/delve/service/api"
+	"github.com/philippta/godbg/debug"
 	"github.com/philippta/godbg/dlv"
 	"github.com/philippta/godbg/frame"
 )
@@ -74,7 +75,7 @@ func (s *Source) ToggleBreakpoint(dbg *dlv.Debugger) {
 	}
 
 	if activeBP == nil {
-		dbg.CreateFileBreakpoint(s.File.Name, s.Cursors.Line+1)
+		debug.Logf("%v", dbg.CreateFileBreakpoint(s.File.Name, s.Cursors.Line+1))
 	} else {
 		dbg.ClearBreakpoint(activeBP.ID)
 	}
@@ -82,13 +83,21 @@ func (s *Source) ToggleBreakpoint(dbg *dlv.Debugger) {
 	s.Breakpoints = dbg.Breakpoints()
 }
 
-func (s *Source) LoadLocation(file string, line int) {
+func (s *Source) UpdateLocation(dbg *dlv.Debugger) {
+	file, line := dbg.Location()
 	if file == "" {
 		return
 	}
 
+	s.LoadLocation(file)
+
 	s.Cursors.PC = line - 1
 	s.Cursors.Line = line - 1
+}
+
+func (s *Source) LoadLocation(file string) {
+	s.Cursors.Line = 0
+	s.Cursors.PC = -1
 
 	if s.File.Name != file {
 		src, err := os.ReadFile(file)
@@ -107,14 +116,9 @@ func (s *Source) LoadLocation(file string, line int) {
 	}
 }
 
-func (s *Source) RenderFrame() (*frame.Frame, *frame.Frame) {
-	text := frame.New(s.Size.Height, s.Size.Width)
-	text.FillSpace()
-
-	colors := frame.New(s.Size.Height, s.Size.Width)
-
+func (s *Source) RenderFrame(text, colors *frame.Frame, offsetY, offsetX int) {
 	if len(s.File.Lines) == 0 {
-		return text, colors
+		return
 	}
 
 	const iotaBufCap = 5
@@ -126,8 +130,8 @@ func (s *Source) RenderFrame() (*frame.Frame, *frame.Frame) {
 	)
 
 	for i := s.File.LineOffset; i < lineEnd; i++ {
-		y := i - s.File.LineOffset
-		x := 0
+		y := i - s.File.LineOffset + offsetY
+		x := offsetX
 
 		if i == s.Cursors.Line || i == s.Cursors.PC {
 			x = text.WriteString(y, x, "=> ")
@@ -144,35 +148,36 @@ func (s *Source) RenderFrame() (*frame.Frame, *frame.Frame) {
 		paddedItoa(iotaBuf[:], i+1)
 		x = text.WriteString(y, x, string(iotaBuf[iotaBufCap-lineNumWidth:]))
 		x = text.WriteString(y, x, "  ")
-		x = text.WriteString(y, x, string(s.File.Lines[i]))
+
+		line := s.File.Lines[i]
+		x = text.WriteString(y, x, string(line[:min(len(line), s.Size.Width-x)]))
 	}
 
 	for i := s.File.LineOffset; i < lineEnd; i++ {
-		y := i - s.File.LineOffset
+		y := i - s.File.LineOffset + offsetY
+		x := offsetX
 
 		if !s.Focused {
-			colors.SetColor(y, 0, 3, frame.ColorFGBlack)
+			colors.SetColor(y, x, 3, frame.ColorFGBlack)
 		} else if i == s.Cursors.Line {
-			colors.SetColor(y, 0, 3, frame.ColorFGGreen)
+			colors.SetColor(y, x, 3, frame.ColorFGGreen)
 		} else if i == s.Cursors.PC {
-			colors.SetColor(y, 0, 3, frame.ColorFGYellow)
+			colors.SetColor(y, x, 3, frame.ColorFGYellow)
 		} else {
-			colors.SetColor(y, 0, 3, frame.ColorReset)
+			colors.SetColor(y, x, 3, frame.ColorReset)
 		}
 
 		if contains(breakpoints, i) {
-			colors.SetColor(y, 3, 1, frame.ColorFGRed)
+			colors.SetColor(y, x+3, 1, frame.ColorFGRed)
 		}
 
-		colors.SetColor(y, 5, lineNumWidth+1, frame.ColorFGBlue)
+		colors.SetColor(y, x+5, lineNumWidth+1, frame.ColorFGBlue)
 
 		if i == s.Cursors.Line {
-			offset := lineNumWidth + 6
+			offset := x + lineNumWidth + 6
 			colors.SetColor(y, offset, s.Size.Width-offset, frame.ColorFGWhite)
 		}
 	}
-
-	return text, colors
 }
 
 func numDigits(i int) int {

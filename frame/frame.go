@@ -32,6 +32,7 @@ var Colors = [][]byte{
 const numSpaces = 1024
 
 var spaces = strings.Repeat(" ", numSpaces)
+var zeroes = make([]rune, numSpaces)
 
 func New(rows, cols int) *Frame {
 	return &Frame{
@@ -50,6 +51,20 @@ type Frame struct {
 func (f *Frame) FillSpace() {
 	for cursor := 0; cursor < len(f.Buf); cursor += len(spaces) {
 		copy(f.Buf[cursor:], []rune(spaces))
+	}
+}
+
+func (f *Frame) FillSpaceRegion(y, x, w, h int) {
+	for row := y; row < y+h; row++ {
+		startIdx := row*f.Cols + x
+		copy(f.Buf[startIdx:startIdx+w], []rune(spaces[:w]))
+	}
+}
+
+func (f *Frame) FillZeroesRegion(y, x, w, h int) {
+	for row := y; row < y+h; row++ {
+		startIdx := row*f.Cols + x
+		copy(f.Buf[startIdx:startIdx+w], zeroes[:w])
 	}
 }
 

@@ -17,11 +17,10 @@ import (
 const (
 	PaneSource = iota
 	PaneVariables
-	PaneFiles
 	PaneCount
 )
 
-func Run(dbg *dlv.Debugger) {
+func Run(dbg *dlv.Debugger, dir string) {
 	tty, err := tty.Open()
 	if err != nil {
 		log.Fatal(err)
@@ -34,19 +33,20 @@ func Run(dbg *dlv.Debugger) {
 	v := &View{
 		dbg:   dbg,
 		tty:   tty,
-		focus: PaneFiles,
+		focus: PaneSource,
+		files: Files{Dir: dir},
 	}
 
 	out := v.tty.Output()
 	out.Write(term.AltScreen)
 	out.Write(term.HideCursor)
-
 	v.UpdateFocus()
 
 	w, h, _ := v.tty.Size()
 	v.Resize(w, h)
 	go v.ResizeLoop()
 
+	v.files.LoadFiles()
 	v.source.InitBreakpoints(v.dbg)
 	v.Update()
 	v.Paint()
@@ -72,6 +72,7 @@ type View struct {
 	source    Source
 	variables Variables
 	files     Files
+	filesOpen bool
 
 	dbg *dlv.Debugger
 }
@@ -93,61 +94,84 @@ func (v *View) InputLoop() {
 
 		debug.Logf("Input: %v", key)
 
-		switch v.focus {
-		case PaneSource:
-			switch key {
-			case '\t':
-				v.focus = (v.focus + 1) % PaneCount
-				v.UpdateFocus()
-			case 'k': // Move up
-				v.source.MoveUp()
-			case 'j': // Move down
-				v.source.MoveDown()
-			case 's': // Step
-				v.dbg.Step()
-				v.Update()
-			case 'i': // Step in
-				v.dbg.StepIn()
-				v.Update()
-			case 'o': // Step out
-				v.dbg.StepOut()
-				v.Update()
-			case 'c': // Continue
-				v.dbg.Continue()
-				v.Update()
-			case 'b': // Breakpoint
-				v.source.ToggleBreakpoint(v.dbg)
-			case 'q':
-				return
-			case 16:
-				v.focus = PaneFiles
+		if !v.filesOpen {
+			switch v.focus {
+			case PaneSource:
+				switch key {
+				case '\t':
+					v.focus = (v.focus + 1) % PaneCount
+					v.UpdateFocus()
+				case 'k': // Move up
+					v.source.MoveUp()
+				case 'j': // Move down
+					v.source.MoveDown()
+				case 's': // Step
+					v.dbg.Step()
+					v.Update()
+				case 'i': // Step in
+					v.dbg.StepIn()
+					v.Update()
+				case 'o': // Step out
+					v.dbg.StepOut()
+					v.Update()
+				case 'c': // Continue
+					v.dbg.Continue()
+					v.Update()
+				case 'b': // Breakpoint
+					v.source.ToggleBreakpoint(v.dbg)
+				case 'q':
+					return
+				case 16:
+					v.filesOpen = true
+					v.files.Reset()
+				}
+			case PaneVariables:
+				switch key {
+				case '\t':
+					v.focus = (v.focus + 1) % PaneCount
+					v.UpdateFocus()
+				case 'k': // Move up
+					v.variables.MoveUp()
+				case 'j': // Move down
+					v.variables.MoveDown()
+				case 'l': // Expand
+					v.variables.Expand()
+				case 'h': // Collapse
+					v.variables.Collapse()
+				case 'q':
+					return
+				case 16:
+					v.filesOpen = true
+					v.files.Reset()
+				}
 			}
-		case PaneVariables:
+		} else {
 			switch key {
-			case '\t':
-				v.focus = (v.focus + 1) % PaneCount
-				v.UpdateFocus()
-			case 'k': // Move up
-				v.variables.MoveUp()
-			case 'j': // Move down
-				v.variables.MoveDown()
-			case 'q':
-				return
-			case 16:
-				v.focus = PaneFiles
-			}
-		case PaneFiles:
-			switch key {
-			case '\t':
-				v.focus = (v.focus + 1) % PaneCount
-				v.UpdateFocus()
 			case 16: // CTRL+P
-				v.focus = PaneSource
+				v.filesOpen = false
 			default:
 				var more []rune
 				for v.tty.Buffered() {
 					key, _ := v.tty.ReadRune()
 					more = append(more, key)
+				}
+				if key == 27 && len(more) == 0 { // ESC
+					v.filesOpen = false
+					v.files.Reset()
+					break
+				}
+				if key == 13 { // Enter
+					file := v.files.FilteredFiles[v.files.FileCursor]
+					v.filesOpen = false
+					v.files.Reset()
+
+					dbgfile, _ := v.dbg.Location()
+					if file == dbgfile {
+						v.source.UpdateLocation(v.dbg)
+					} else {
+						v.source.LoadLocation(file)
+					}
+					break
 				}
 				v.files.HandleInput(key, more)
 			}
@@ -169,21 +193,20 @@ func (v *View) InputLoop() {
 func (v *View) Update() {
 	p := perf.Start("Update")
 
-	file, line := v.dbg.Location()
 	p.Mark("Location")
 	vars, _ := v.dbg.Variables()
 	p.Mark("Variables")
 
-	v.source.LoadLocation(file, line)
+	v.source.UpdateLocation(v.dbg)
 	p.Mark("LoadLoc")
 
 	v.variables.Load(vars)
 	p.Mark("LoadVar")
-	if file != v.prevFile {
+	if v.source.File.Name != v.prevFile {
 		v.variables.ResetCursor(v.height)
 	}
 
-	v.prevFile = file
+	v.prevFile = v.source.File.Name
 	p.End()
 }
 
@@ -197,26 +220,20 @@ func (v *View) Paint() {
 	p.Mark("Color Frame")
 
 	for i := 0; i < v.height; i++ {
-		colors.SetColor(i, v.width/2, 1, frame.ColorFGBlack)
-		text.WriteAt(i, v.width/2, '│')
+		colors.SetColor(i, v.source.Size.Width, 1, frame.ColorFGBlack)
+		text.WriteAt(i, v.source.Size.Width, '│')
 	}
+	p.Mark("Render VBar")
 
-	sourceText, sourceColors := v.source.RenderFrame()
-	text.CopyFrom(0, 0, sourceText)
-	colors.CopyFrom(0, 0, sourceColors)
+	v.source.RenderFrame(text, colors, 0, 0)
 	p.Mark("Render Source")
 
-	varsText, varsColors := v.variables.RenderFrame()
-	text.CopyFrom(0, v.width/2+1, varsText)
-	colors.CopyFrom(0, v.width/2+1, varsColors)
+	v.variables.RenderFrame(text, colors, 0, v.source.Size.Width+1)
 	p.Mark("Render Variables")
 
-	var filesY, filesX int
-	if v.focus == PaneFiles {
-		filesY, filesX = 1, 10
-		filesText, filesColors := v.files.RenderFrame()
-		text.CopyFrom(filesY, filesX, filesText)
-		colors.CopyFrom(filesY, filesX, filesColors)
+	filesY, filesX := v.height/2-v.files.Size.Height/2, v.width/2-v.files.Size.Width/2
+	if v.filesOpen {
+		v.files.RenderFrame(text, colors, filesY, filesX)
 		p.Mark("Render Files")
 	}
 
@@ -225,7 +242,7 @@ func (v *View) Paint() {
 	out.Write(term.ResetCursor)
 	text.PrintColored(out, colors)
 
-	if v.focus == PaneFiles {
+	if v.filesOpen {
 		cy, cx := v.files.CursorPosition()
 		out.Write(term.ShowCursor)
 		out.Write(term.PositionCursor(cy+filesY, cx+filesX))
@@ -238,14 +255,14 @@ func (v *View) Paint() {
 func (v *View) UpdateFocus() {
 	v.source.Focused = v.focus == PaneSource
 	v.variables.Focused = v.focus == PaneVariables
-	v.files.Focused = v.focus == PaneFiles
 }
 
 func (v *View) Resize(width, height int) {
 	v.width = width
 	v.height = height
+
 	v.source.Resize(width/2, height)
-	v.variables.Resize(width/2-1, height)
+	v.variables.Resize(width-1-v.source.Size.Width, height)
 	v.files.Resize(width/2, height/2)
 }
 
