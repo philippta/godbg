@@ -110,7 +110,7 @@ func (v *Variables) RenderFrame(text, colors *frame.Frame, offsetY, offsetX int)
 			colors.SetColor(y, x, v.Size.Width-x, frame.ColorFGWhite)
 		}
 		x = text.WriteString(y, x, " = ")
-		x = text.WriteString(y, x, va.Value)
+		x = text.WriteString(y, x, string(va.Value[:min(len(va.Value), v.Size.Width-x)]))
 
 		typePadSize := v.Size.Width - x - len(va.Type)
 		if typePadSize > 0 {
