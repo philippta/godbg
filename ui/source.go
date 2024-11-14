@@ -83,21 +83,13 @@ func (s *Source) ToggleBreakpoint(dbg *dlv.Debugger) {
 	s.Breakpoints = dbg.Breakpoints()
 }
 
-func (s *Source) UpdateLocation(dbg *dlv.Debugger) {
-	file, line := dbg.Location()
+func (s *Source) LoadLocation(file string, line int) {
 	if file == "" {
 		return
 	}
 
-	s.LoadLocation(file)
-
 	s.Cursors.PC = line - 1
 	s.Cursors.Line = line - 1
-}
-
-func (s *Source) LoadLocation(file string) {
-	s.Cursors.Line = 0
-	s.Cursors.PC = -1
 
 	if s.File.Name != file {
 		src, err := os.ReadFile(file)

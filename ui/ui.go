@@ -161,15 +161,16 @@ func (v *View) InputLoop() {
 					break
 				}
 				if key == 13 { // Enter
-					file := v.files.FilteredFiles[v.files.FileCursor]
+					requestedFile := v.files.FilteredFiles[v.files.FileCursor]
 					v.filesOpen = false
 					v.files.Reset()
 
-					dbgfile, _ := v.dbg.Location()
-					if file == dbgfile {
-						v.source.UpdateLocation(v.dbg)
+					debugFile, debugLine := v.dbg.Location()
+					if debugFile == requestedFile {
+						v.source.LoadLocation(debugFile, debugLine)
 					} else {
-						v.source.LoadLocation(file)
+						v.source.LoadLocation(requestedFile, 1)
+						v.source.Cursors.PC = -1
 					}
 					break
 				}
@@ -197,7 +198,7 @@ func (v *View) Update() {
 	vars, _ := v.dbg.Variables()
 	p.Mark("Variables")
 
-	v.source.UpdateLocation(v.dbg)
+	v.source.LoadLocation(v.dbg.Location())
 	p.Mark("LoadLoc")
 
 	v.variables.Load(vars)
@@ -231,8 +232,9 @@ func (v *View) Paint() {
 	v.variables.RenderFrame(text, colors, 0, v.source.Size.Width+1)
 	p.Mark("Render Variables")
 
-	filesY, filesX := v.height/2-v.files.Size.Height/2, v.width/2-v.files.Size.Width/2
+	filesY, filesX := 3, 16
 	if v.filesOpen {
+		colors.Fill(frame.ColorFGBlack)
 		v.files.RenderFrame(text, colors, filesY, filesX)
 		p.Mark("Render Files")
 	}
@@ -263,7 +265,7 @@ func (v *View) Resize(width, height int) {
 
 	v.source.Resize(width/2, height)
 	v.variables.Resize(width-1-v.source.Size.Width, height)
-	v.files.Resize(width/2, height/2)
+	v.files.Resize(width-32, height-6)
 }
 
 func (v *View) ResizeLoop() {
