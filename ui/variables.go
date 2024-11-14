@@ -222,6 +222,10 @@ func fillValue(v *api.Variable) {
 			v.Value = "0x" + strconv.FormatInt(i, 16)
 		}
 	case reflect.Chan:
+		if len(v.Children) < 8 {
+			v.Value = "???"
+			break
+		}
 		buf := v.Children[2].Children[0]
 		recv, _ := strconv.Atoi(v.Children[7].Value)
 
