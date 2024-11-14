@@ -6,6 +6,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/mattn/go-tty"
 	"github.com/philippta/godbg/debug"
 	"github.com/philippta/godbg/dlv"
@@ -30,11 +31,19 @@ func Run(dbg *dlv.Debugger, dir string) {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
+	previewCache, err := lru.New[string, []string](100)
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	v := &View{
 		dbg:   dbg,
 		tty:   tty,
 		focus: PaneSource,
-		files: Files{Dir: dir},
+		files: Files{
+			Dir:          dir,
+			PreviewCache: previewCache,
+		},
 	}
 
 	out := v.tty.Output()
@@ -91,8 +100,6 @@ func (v *View) InputLoop() {
 		if err != nil {
 			panic(err)
 		}
-
-		debug.Logf("Input: %v", key)
 
 		if !v.filesOpen {
 			switch v.focus {

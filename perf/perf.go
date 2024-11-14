@@ -6,12 +6,17 @@ import (
 	"github.com/philippta/godbg/debug"
 )
 
+const disabled = true
+
 type Profiler struct {
 	start time.Time
 	last  time.Time
 }
 
 func Start(name ...string) *Profiler {
+	if disabled {
+		return nil
+	}
 	if len(name) > 0 {
 		debug.Logf("=================================")
 		debug.Logf("Profiling: %s", name[0])
@@ -22,6 +27,9 @@ func Start(name ...string) *Profiler {
 }
 
 func (p *Profiler) Mark(label string) {
+	if p == nil {
+		return
+	}
 	now := time.Now()
 	dur := now.Sub(p.last)
 	debug.Logf("%-20s %12v", label, dur)
@@ -29,6 +37,9 @@ func (p *Profiler) Mark(label string) {
 }
 
 func (p *Profiler) End() {
+	if p == nil {
+		return
+	}
 	dur := time.Since(p.start)
 	if p.start != p.last {
 		debug.Logf("---------------------------------")

@@ -96,7 +96,7 @@ func (s *Source) LoadLocation(file string, line int) {
 		must(err)
 
 		src = bytes.ReplaceAll(src, []byte{'\t'}, []byte("    "))
-		if src[len(src)-1] == '\n' {
+		if len(src) > 0 && src[len(src)-1] == '\n' {
 			src = src[:len(src)-1]
 		}
 

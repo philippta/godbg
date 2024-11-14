@@ -110,11 +110,11 @@ func (v *Variables) RenderFrame(text, colors *frame.Frame, offsetY, offsetX int)
 			colors.SetColor(y, x, v.Size.Width-x, frame.ColorFGWhite)
 		}
 		x = text.WriteString(y, x, " = ")
-		x = text.WriteString(y, x, string(va.Value[:min(len(va.Value), v.Size.Width-x)]))
+		x = text.WriteString(y, x, va.Value)
 
-		typePadSize := v.Size.Width - x - len(va.Type)
-		if typePadSize > 0 {
-			text.WriteString(y, v.Size.Width-len(va.Type), va.Type)
+		if x-offsetX+len(va.Type) <= v.Size.Width {
+			text.WriteString(y, offsetX+v.Size.Width-len(va.Type), va.Type)
+			colors.SetColor(y, offsetX+v.Size.Width-len(va.Type), len(va.Type), frame.ColorFGBlue)
 		}
 
 		linenum++
@@ -167,7 +167,12 @@ func fillValue(v *api.Variable) {
 			v.Value = "<nil>"
 		}
 	case reflect.String:
-		v.Value = "\"" + v.Value + "\""
+		if int(v.Len) > len(v.Value) {
+			v.Value = strconv.Quote(v.Value)
+			v.Value = v.Value[:len(v.Value)-1] + "..."
+		} else {
+			v.Value = strconv.Quote(v.Value)
+		}
 	case reflect.Slice, reflect.Array:
 		globsb.WriteByte('[')
 		for i := range v.Children {
@@ -222,22 +227,22 @@ func fillValue(v *api.Variable) {
 			v.Value = "0x" + strconv.FormatInt(i, 16)
 		}
 	case reflect.Chan:
-		if len(v.Children) < 8 {
-			v.Value = "???"
-			break
-		}
-		buf := v.Children[2].Children[0]
-		recv, _ := strconv.Atoi(v.Children[7].Value)
+		if len(v.Children) == 0 {
+			v.Value = "<nil>"
+		} else {
+			buf := v.Children[2].Children[0]
+			recv, _ := strconv.Atoi(v.Children[7].Value)
 
-		globsb.WriteByte('[')
-		for i := recv; i < len(buf.Children)+recv; i++ {
-			globsb.WriteString(buf.Children[i%len(buf.Children)].Value)
-			if i < len(buf.Children)+recv-1 {
-				globsb.WriteString(",")
+			globsb.WriteByte('[')
+			for i := recv; i < len(buf.Children)+recv; i++ {
+				globsb.WriteString(buf.Children[i%len(buf.Children)].Value)
+				if i < len(buf.Children)+recv-1 {
+					globsb.WriteString(",")
+				}
 			}
+			globsb.WriteByte(']')
+			v.Value = globsb.String()
 		}
-		globsb.WriteByte(']')
-		v.Value = globsb.String()
 	}
 }
 
@@ -364,6 +369,8 @@ func collapseVariable(vars []Variable, cursor *int, exp map[string]bool) {
 func simpleType(t string) string {
 	if strings.HasSuffix(t, "interface {}") {
 		return strings.Replace(t, "interface {}", "any", 1)
+	} else if strings.HasPrefix(t, "struct {") {
+		return "struct"
 	}
 	return t
 }

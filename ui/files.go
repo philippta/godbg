@@ -1,11 +1,12 @@
 package ui
 
 import (
+	"bytes"
 	"os"
 	"strings"
 
+	lru "github.com/hashicorp/golang-lru/v2"
 	"github.com/junegunn/fzf/src/util"
-	"github.com/philippta/godbg/debug"
 	"github.com/philippta/godbg/frame"
 	"github.com/philippta/godbg/fuzzy"
 )
@@ -19,6 +20,7 @@ type Files struct {
 	FileNames     []util.Chars
 	FilteredFiles []string
 	Preview       []string
+	PreviewCache  *lru.Cache[string, []string]
 }
 
 func (f *Files) LoadFiles() {
@@ -41,11 +43,10 @@ func (f *Files) Reset() {
 	f.SearchCursor = 0
 	f.Search = ""
 	f.FilterFiles()
+	f.LoadPreview()
 }
 
 func (f *Files) HandleInput(key rune, more []rune) {
-	prevFileCursor := f.FileCursor
-
 	switch key {
 	case '\t':
 	case 127: // DEL
@@ -54,7 +55,6 @@ func (f *Files) HandleInput(key rune, more []rune) {
 		searchBoxWidth := f.Size.Width/2 - 4
 		f.SearchCursor = min(len(f.Search), searchBoxWidth)
 	case 27: // ESC
-		debug.Logf("%v", more)
 		if len(more) != 2 {
 			break
 		}
@@ -75,14 +75,53 @@ func (f *Files) HandleInput(key rune, more []rune) {
 
 		searchBoxWidth := f.Size.Width/2 - 4
 		f.SearchCursor = min(len(f.Search), searchBoxWidth)
+		f.FileCursor = 0
 	}
 
 	f.FilterFiles()
+	f.LoadPreview()
+}
 
-	if f.FileCursor != prevFileCursor {
-		data, _ := os.ReadFile(f.FilteredFiles[f.FileCursor])
-		f.Preview = strings.Split(string(data), "\n")
+func (f *Files) LoadPreview() {
+	if f.FileCursor >= len(f.FilteredFiles) {
+		return
 	}
+
+	file := f.FilteredFiles[f.FileCursor]
+	preview, ok := f.PreviewCache.Get(file)
+	if !ok {
+		preview = readFileLines(file, f.Size.Width*f.Size.Height, f.Size.Height-2)
+		f.PreviewCache.Add(file, preview)
+	}
+	f.Preview = preview
+}
+
+func readFileLines(file string, maxBytes int, maxLines int) []string {
+	f, err := os.Open(file)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+
+	buf := make([]byte, maxBytes)
+	n, err := f.Read(buf)
+	if err != nil {
+		return nil
+	}
+	if n == 0 {
+		return []string{"(empty)"}
+	}
+
+	buf = buf[:n]
+
+	for _, b := range buf {
+		if b == 0 {
+			return []string{"(binary file)"}
+		}
+	}
+
+	buf = bytes.ReplaceAll(buf, []byte("\t"), []byte("    "))
+	return strings.SplitN(string(buf), "\n", maxLines+1)
 }
 
 func (f *Files) FilterFiles() {
@@ -160,15 +199,8 @@ func (f *Files) RenderFrame(text, colors *frame.Frame, offsetY, offsetX int) {
 		}
 	}
 
-	for i, line := range f.Preview {
-		line = strings.TrimSpace(line)
-		if len(line) > 20 {
-			line = line[:20]
-		}
-		text.WriteString(y+i+1, x+f.Size.Width/2+2, line)
-		if i > 10 {
-			break
-		}
+	for i := 0; i < len(f.Preview) && i < f.Size.Height-2; i++ {
+		text.WriteString(y+i+1, x+f.Size.Width/2+2, f.Preview[i])
 	}
 
 }
