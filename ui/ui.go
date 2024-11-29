@@ -270,7 +270,7 @@ func (v *View) Resize(width, height int) {
 	v.width = width
 	v.height = height
 
-	v.source.Resize(width/2, height)
+	v.source.Resize(width*5/7, height)
 	v.variables.Resize(width-1-v.source.Size.Width, height)
 	v.files.Resize(width-32, height-6)
 }

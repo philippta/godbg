@@ -137,6 +137,9 @@ func fillValue(v *api.Variable) {
 	globsb.Reset()
 
 	v.Type = simpleType(v.Type)
+	if v.Name == "" {
+		v.Name = "*"
+	}
 
 	switch v.Kind {
 	case reflect.Int,
@@ -154,6 +157,10 @@ func fillValue(v *api.Variable) {
 		reflect.Float64:
 		if v.Value == "" {
 			v.Value = "0"
+		}
+	case reflect.Bool:
+		if v.Value == "" {
+			v.Value = "false"
 		}
 	case reflect.Complex64,
 		reflect.Complex128:

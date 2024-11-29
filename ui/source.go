@@ -102,10 +102,9 @@ func (s *Source) LoadLocation(file string, line int) {
 
 		s.File.Lines = bytes.Split(src, []byte{'\n'})
 		s.File.Name = file
-		s.CenterCursor()
-	} else {
-		s.AlignCursor()
 	}
+
+	s.CenterCursor()
 }
 
 func (s *Source) RenderFrame(text, colors *frame.Frame, offsetY, offsetX int) {
